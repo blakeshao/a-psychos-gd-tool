@@ -8,11 +8,15 @@ import type { OutputValues, SocketType, Value } from './values';
 export interface SocketSpec {
   name: string;
   type: SocketType;
+  /** optional inputs may be left unwired; cook() receives no value for them */
+  optional?: boolean;
 }
 
 export type ParamSpec =
   | { name: string; kind: 'string'; default: string }
-  | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number };
+  | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number }
+  | { name: string; kind: 'color'; default: string } // '#rrggbb'
+  | { name: string; kind: 'select'; options: string[]; default: string };
 
 export interface CookContext {
   /** null in headless tests — CPU nodes must not touch it */

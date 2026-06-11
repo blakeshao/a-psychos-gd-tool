@@ -179,6 +179,27 @@ function ParamControl({
       </label>
     );
   }
+  if (spec.kind === 'color') {
+    return (
+      <label className="param">
+        <span>{spec.name}</span>
+        <input type="color" value={String(value)} onChange={(e) => onChange(e.target.value)} />
+        <span className="param-value">{String(value)}</span>
+      </label>
+    );
+  }
+  if (spec.kind === 'select') {
+    return (
+      <label className="param">
+        <span>{spec.name}</span>
+        <select value={String(value)} onChange={(e) => onChange(e.target.value)}>
+          {spec.options.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
   return (
     <label className="param">
       <span>{spec.name}</span>

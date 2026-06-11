@@ -31,10 +31,10 @@ export function GfxNode({ id }: NodeProps) {
               type="target"
               position={Position.Left}
               id={s.name}
-              title={`${s.name}: ${s.type}`}
+              title={`${s.name}: ${s.type}${s.optional ? ' (optional)' : ''}`}
               style={{ background: SOCKET_COLORS[s.type] }}
             />
-            <span>{s.name}</span>
+            <span>{s.optional ? `${s.name}?` : s.name}</span>
           </div>
         ))}
         {def.outputs.map((s) => (

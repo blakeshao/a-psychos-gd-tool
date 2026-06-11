@@ -133,6 +133,34 @@ describe('Evaluator', () => {
     expect(counts.Const).toBe(1); // shared upstream cooked once, not twice
   });
 
+  it('allows optional inputs to stay unwired, requires the rest', async () => {
+    const counts: Record<string, number> = {};
+    const registry = stubRegistry(counts);
+    registry.set('Opt', {
+      type: 'Opt',
+      inputs: [
+        { name: 'in', type: 'raster' },
+        { name: 'extra', type: 'raster', optional: true },
+      ],
+      outputs: [{ name: 'out', type: 'raster' }],
+      params: [],
+      cook: (i) => ({ out: num((i.in as never as { v: number }).v + (i.extra ? 1000 : 0)) }),
+    });
+    const ev = new Evaluator(registry);
+    const g: Graph = {
+      nodes: {
+        a: { id: 'a', type: 'Const', params: { v: 3 } },
+        o: { id: 'o', type: 'Opt', params: {} },
+      },
+      edges: [{ from: { node: 'a', socket: 'out' }, to: { node: 'o', socket: 'in' } }],
+    };
+    const { outputs } = await ev.evaluate(g, 'o', ctx);
+    expect((outputs.out as never as { v: number }).v).toBe(3); // cooked without 'extra'
+
+    g.edges = []; // now even the required input is gone
+    await expect(ev.evaluate(g, 'o', ctx)).rejects.toThrow(/input "in" is not connected/);
+  });
+
   it('awaits async nodes with no special casing', async () => {
     const ev = new Evaluator(stubRegistry({}));
     const g: Graph = {

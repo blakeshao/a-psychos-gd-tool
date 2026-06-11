@@ -121,3 +121,8 @@ export const useApp = create<AppStore>((set) => ({
       return { graph: { ...s.graph, edges: s.graph.edges.filter((e) => !drop.has(edgeKey(e))) } };
     }),
 }));
+
+// dev/verify handle — scripts/verify.mjs builds graphs through this
+if (import.meta.env?.DEV) {
+  (globalThis as Record<string, unknown>).__app = useApp;
+}

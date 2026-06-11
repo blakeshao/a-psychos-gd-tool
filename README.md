@@ -2,7 +2,7 @@
 
 A node-based graphic design tool. Types flow on typed wires — `text => vector => raster`, every step explicit, never coerced.
 
-**Status: Phase 2.** Full node editor (@xyflow/react): drag nodes from the palette, wire them with type-checked connections (mismatched socket types and cycles are rejected at drag time), edit params in the selection-driven inspector, and watch the HIT/MISS cook log prove only descendants of a change re-cook.
+**Status: Phase 3.** Twelve node types. New raster lane: Noise (deterministic value/grain source), Dither (Bayer), Recolor (duotone), Chroma Key, ASCII (glyph-atlas rebuild), To Alpha, and Composite (blend modes + optional alpha mask — the first multi-input, optional-input node). Every op is one WGSL pass on the shared fullscreen-pass frame; param drags at 60Hz recycle pool textures instead of allocating.
 
 ## Run
 
@@ -25,8 +25,8 @@ npm test                # headless engine tests — cache + pool, no GPU needed
 ## Roadmap
 
 1. ~~Engine spine + Text→Output slice~~
-2. ~~Node editor wired to the engine; type-checking on drag~~ ← here
-3. Raster breadth: Dither, Recolor, Chroma Key, ASCII, Composite…
+2. ~~Node editor wired to the engine; type-checking on drag~~
+3. ~~Raster breadth: Noise, Dither, Recolor, Chroma Key, ASCII, To Alpha, Composite~~ ← here
 4. Vector ops + Trace/To Alpha conversions
 5. Elements & layout: Split, Duplicator, Grid, Sample Path, Place…
 6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)

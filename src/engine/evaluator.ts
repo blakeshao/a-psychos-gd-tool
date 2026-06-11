@@ -91,7 +91,7 @@ export class Evaluator {
 
       // 2b. a half-wired graph should fail with a message, not a crash deep in a cook
       for (const spec of def.inputs) {
-        if (!(spec.name in inputs)) {
+        if (!spec.optional && !(spec.name in inputs)) {
           throw new Error(`${node.type} (${nodeId}): input "${spec.name}" is not connected`);
         }
       }
