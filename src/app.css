@@ -47,8 +47,11 @@ body {
 .ev-ms { margin-left: auto; color: #888; }
 .cook-error { color: #e96a6a; margin-bottom: 8px; white-space: pre-wrap; }
 
+.main-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
 .viewport {
-  flex: 1;
+  flex: 1.2;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -56,7 +59,41 @@ body {
   background-image: radial-gradient(#222 1px, transparent 1px);
   background-size: 16px 16px;
 }
-.viewport canvas { max-width: 90%; max-height: 90%; box-shadow: 0 8px 40px rgba(0,0,0,.5); }
+.viewport canvas { max-width: 92%; max-height: 92%; box-shadow: 0 8px 40px rgba(0,0,0,.5); }
+
+.editor { flex: 1; min-height: 0; border-top: 1px solid #2a2a2a; }
+
+.hint { color: #777; }
+.inspector { min-height: 86px; }
 
 .boot-msg { padding: 40px; color: #888; }
 .boot-msg code { color: #bbb; }
+
+/* node editor */
+.palette { display: flex; gap: 6px; flex-wrap: wrap; }
+.palette button {
+  background: #1d1d1d; color: #ccc; border: 1px solid #333;
+  border-radius: 4px; padding: 4px 8px; font: inherit; cursor: pointer;
+}
+.palette button:hover { background: #2a2a2a; color: #fff; }
+
+.gfx-node {
+  background: #1c1c1e; border: 1px solid #3a3a3a; border-radius: 6px;
+  min-width: 110px; font-size: 11px; color: #ddd;
+}
+.react-flow__node.selected .gfx-node { border-color: #6aa9e9; }
+.gfx-title {
+  padding: 5px 8px; font-weight: bold; border-bottom: 1px solid #2c2c2c;
+  background: #242428; border-radius: 6px 6px 0 0;
+}
+.gfx-body { padding: 4px 0; }
+.gfx-row { position: relative; padding: 3px 10px; color: #aaa; }
+.gfx-row.out { text-align: right; }
+.gfx-row .react-flow__handle {
+  width: 9px; height: 9px; border: 1px solid #111;
+  top: 50%; transform: translateY(-50%);
+}
+.gfx-row.in .react-flow__handle { left: -5px; }
+.gfx-row.out .react-flow__handle { right: -5px; }
+
+.react-flow { background: #141414; }

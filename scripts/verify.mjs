@@ -1,5 +1,8 @@
-// Drive the dev server in headless Chrome, change the blur radius, and dump
-// the cook log — verifies the Phase 1 gate end to end (pixels + cache HITs).
+// Drives the app in headless Chrome — the Phase 2 gate:
+//  1. select the Blur node, drag its slider → upstream nodes HIT cache
+//  2. drag an ILLEGAL wire (text -> raster input) → rejected, edge count unchanged
+//  3. drag a LEGAL rewire (Rasterize.out -> Output.in) → Blur drops out of the
+//     cook, upstream still HITs
 // Usage: node scripts/verify.mjs [url]
 import puppeteer from 'puppeteer-core';
 
@@ -8,46 +11,64 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
-  headless: 'shell' === 'never' ? false : true,
-  args: ['--enable-unsafe-webgpu', '--hide-scrollbars', '--window-size=1280,820'],
-  defaultViewport: { width: 1280, height: 820 },
+  args: ['--enable-unsafe-webgpu', '--hide-scrollbars', '--window-size=1480,920'],
+  defaultViewport: { width: 1480, height: 920 },
 });
 
 const page = await browser.newPage();
-page.on('console', (msg) => {
-  if (msg.type() === 'error' || msg.type() === 'warning') console.log(`[console.${msg.type()}]`, msg.text());
-});
 page.on('pageerror', (err) => console.log('[pageerror]', err.message));
 
 await page.goto(url, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.cook-log li', { timeout: 15000 });
 
 const readLog = () =>
-  page.$$eval('.cook-log li', (lis) =>
-    lis.map((li) => li.textContent?.replace(/\s+/g, ' ').trim()),
-  );
+  page.$$eval('.cook-log li', (lis) => lis.map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
+const edgeCount = () => page.$$eval('.react-flow__edge', (els) => els.length);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function dragHandle(fromNode, fromSocket, toNode, toSocket) {
+  const sel = (node, socket, kind) =>
+    `.react-flow__node[data-id="${node}"] .react-flow__handle.${kind}[data-handleid="${socket}"]`;
+  const src = await page.waitForSelector(sel(fromNode, fromSocket, 'source'));
+  const dst = await page.waitForSelector(sel(toNode, toSocket, 'target'));
+  const a = await src.boundingBox();
+  const b = await dst.boundingBox();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await sleep(400);
+}
 
 console.log('--- cook 1 (cold) ---');
 for (const line of await readLog()) console.log(line);
 
-// nudge the blur radius and re-read the log
+// 1. select Blur, change radius via the inspector
+await page.click('.react-flow__node[data-id="blur1"]');
+await page.waitForSelector('.inspector input[type=range]');
 await page.evaluate(() => {
-  const slider = [...document.querySelectorAll('.node-panel')]
-    .find((p) => p.querySelector('h2')?.textContent?.includes('Blur'))
-    ?.querySelector('input[type=range]');
-  if (!slider) throw new Error('blur slider not found');
+  const slider = document.querySelector('.inspector input[type=range]');
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(slider, '24');
   slider.dispatchEvent(new Event('input', { bubbles: true }));
 });
-await new Promise((r) => setTimeout(r, 500));
+await sleep(400);
+console.log('--- cook 2 (blur radius changed via inspector) ---');
+for (const line of await readLog()) console.log(line);
 
-console.log('--- cook 2 (blur radius changed) ---');
+// 2. illegal wire: Text.out (text) -> Blur.in (raster) must be rejected
+const before = await edgeCount();
+await dragHandle('text1', 'out', 'blur1', 'in');
+const after = await edgeCount();
+console.log(`--- illegal wire text->raster: edges ${before} -> ${after} (${before === after ? 'REJECTED ok' : 'BUG: accepted!'}) ---`);
+
+// 3. legal rewire: Rasterize.out -> Output.in (replaces Blur.out -> Output.in)
+await dragHandle('raster1', 'out', 'out', 'in');
+console.log('--- cook 3 (rewired Rasterize directly into Output) ---');
 for (const line of await readLog()) console.log(line);
 
 const pool = await page.$eval('.pool', (el) => el.textContent);
 console.log('---', pool);
-
 const err = await page.$('.cook-error');
 if (err) console.log('COOK ERROR:', await err.evaluate((el) => el.textContent));
 

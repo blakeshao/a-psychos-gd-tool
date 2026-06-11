@@ -8,6 +8,8 @@ export interface NodeInstance {
   id: NodeId;
   type: string; // keys into the registry
   params: Record<string, ParamValue>;
+  /** editor canvas position — excluded from content hashing, so moving a node never re-cooks */
+  position?: { x: number; y: number };
 }
 
 export interface Edge {
@@ -18,4 +20,25 @@ export interface Edge {
 export interface Graph {
   nodes: Record<NodeId, NodeInstance>;
   edges: Edge[];
+}
+
+/** Is `to` reachable downstream of `from`? Used to reject wires that would create a cycle. */
+export function hasPath(graph: Graph, from: NodeId, to: NodeId): boolean {
+  if (from === to) return true;
+  const queue = [from];
+  const seen = new Set<NodeId>([from]);
+  while (queue.length) {
+    const id = queue.pop()!;
+    for (const e of graph.edges) {
+      if (e.from.node !== id || seen.has(e.to.node)) continue;
+      if (e.to.node === to) return true;
+      seen.add(e.to.node);
+      queue.push(e.to.node);
+    }
+  }
+  return false;
+}
+
+export function edgeKey(e: Edge): string {
+  return `${e.from.node}.${e.from.socket}->${e.to.node}.${e.to.socket}`;
 }

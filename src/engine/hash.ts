@@ -29,6 +29,7 @@ export function stableStringify(value: unknown): string {
   return `{${body}}`;
 }
 
+/** Hashes type + params + upstream only — node position is deliberately excluded. */
 export function hashNode(
   type: string,
   params: Record<string, unknown>,

@@ -89,6 +89,13 @@ export class Evaluator {
         inputHashes.push(`${edge.to.socket}:${result.hash}`);
       }
 
+      // 2b. a half-wired graph should fail with a message, not a crash deep in a cook
+      for (const spec of def.inputs) {
+        if (!(spec.name in inputs)) {
+          throw new Error(`${node.type} (${nodeId}): input "${spec.name}" is not connected`);
+        }
+      }
+
       // 3. content hash → cache lookup
       const hash = hashNode(node.type, node.params, inputHashes);
       this.latestHash.set(nodeId, hash);

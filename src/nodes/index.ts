@@ -12,3 +12,6 @@ export function buildRegistry(): Registry {
   }
   return registry;
 }
+
+/** The app-wide registry singleton. Tests build their own via buildRegistry/stubs. */
+export const registry = buildRegistry();

@@ -1,0 +1,124 @@
+// The node canvas. xyflow renders the document graph; every edit (drag,
+// wire, delete) flows back through store actions. wireIsValid gives live
+// red/green feedback while dragging a connection.
+
+import { useCallback, useMemo } from 'react';
+import {
+  Background,
+  Panel,
+  ReactFlow,
+  type Connection,
+  type Edge as FlowEdge,
+  type EdgeChange,
+  type Node as FlowNode,
+  type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { edgeKey } from '../engine/graph';
+import { registry } from '../nodes';
+import { useApp, wireIsValid } from '../store';
+import { GfxNode, SOCKET_COLORS } from './GfxNode';
+
+const nodeTypes = { gfx: GfxNode };
+
+export function NodeEditor() {
+  const graph = useApp((s) => s.graph);
+  const selectedNodeId = useApp((s) => s.selectedNodeId);
+
+  const nodes: FlowNode[] = useMemo(
+    () =>
+      Object.values(graph.nodes).map((n) => ({
+        id: n.id,
+        type: 'gfx',
+        position: n.position ?? { x: 0, y: 0 },
+        data: {},
+        selected: n.id === selectedNodeId,
+      })),
+    [graph.nodes, selectedNodeId],
+  );
+
+  const edges: FlowEdge[] = useMemo(
+    () =>
+      graph.edges.map((e) => {
+        const fromDef = registry.get(graph.nodes[e.from.node]?.type ?? '');
+        const socketType = fromDef?.outputs.find((s) => s.name === e.from.socket)?.type;
+        return {
+          id: edgeKey(e),
+          source: e.from.node,
+          sourceHandle: e.from.socket,
+          target: e.to.node,
+          targetHandle: e.to.socket,
+          style: socketType ? { stroke: SOCKET_COLORS[socketType], strokeWidth: 1.5 } : undefined,
+        };
+      }),
+    [graph],
+  );
+
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const { moveNode, removeNodes, select, selectedNodeId: selected } = useApp.getState();
+    const removed: string[] = [];
+    for (const c of changes) {
+      if (c.type === 'position' && c.position) moveNode(c.id, c.position);
+      else if (c.type === 'remove') removed.push(c.id);
+      else if (c.type === 'select') {
+        if (c.selected) select(c.id);
+        else if (selected === c.id) select(null);
+      }
+    }
+    if (removed.length) removeNodes(removed);
+  }, []);
+
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const removed = changes.filter((c) => c.type === 'remove').map((c) => c.id);
+    if (removed.length) useApp.getState().removeEdges(removed);
+  }, []);
+
+  const onConnect = useCallback((conn: Connection) => {
+    if (!conn.sourceHandle || !conn.targetHandle) return;
+    useApp.getState().connect({
+      source: conn.source,
+      sourceHandle: conn.sourceHandle,
+      target: conn.target,
+      targetHandle: conn.targetHandle,
+    });
+  }, []);
+
+  const isValidConnection = useCallback((conn: Connection | FlowEdge) => {
+    if (!conn.sourceHandle || !conn.targetHandle) return false;
+    return wireIsValid(useApp.getState().graph, {
+      source: conn.source,
+      sourceHandle: conn.sourceHandle,
+      target: conn.target,
+      targetHandle: conn.targetHandle,
+    });
+  }, []);
+
+  const addNode = (type: string) => {
+    // drop new nodes in a loose cascade so they don't stack exactly
+    const count = Object.keys(useApp.getState().graph.nodes).length;
+    useApp.getState().addNode(type, { x: 80 + (count % 6) * 60, y: 260 + (count % 4) * 40 });
+  };
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      isValidConnection={isValidConnection}
+      deleteKeyCode={['Backspace', 'Delete']}
+      fitView
+      proOptions={{ hideAttribution: true }}
+      colorMode="dark"
+    >
+      <Background gap={16} size={1} />
+      <Panel position="top-left" className="palette">
+        {[...registry.keys()].map((type) => (
+          <button key={type} onClick={() => addNode(type)}>+ {type}</button>
+        ))}
+      </Panel>
+    </ReactFlow>
+  );
+}
