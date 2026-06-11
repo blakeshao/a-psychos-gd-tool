@@ -2,7 +2,7 @@
 // geometry (Displace, Warp, Boolean) flatten curves to polylines first —
 // per-point operations on cubics would distort unevenly along the curve.
 
-import type { PathCmd, Rect } from './values';
+import type { PathCmd, Rect, Transform2D } from './values';
 
 export interface Pt {
   x: number;
@@ -95,6 +95,75 @@ export function boundsOfPaths(paths: PathCmd[][]): Rect {
   }
   if (minX === Infinity) return { x: 0, y: 0, width: 0, height: 0 };
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** Apply a TRS transform to every coordinate (anchor and control points alike). */
+export function transformPaths(paths: PathCmd[][], t: Transform2D): PathCmd[][] {
+  const c = Math.cos(t.rotation), s = Math.sin(t.rotation);
+  const tx = (x: number, y: number) => t.x + t.scale * (c * x - s * y);
+  const ty = (x: number, y: number) => t.y + t.scale * (s * x + c * y);
+  return paths.map((cmds) =>
+    cmds.map((cmd): PathCmd => {
+      switch (cmd.type) {
+        case 'M': return { type: 'M', x: tx(cmd.x, cmd.y), y: ty(cmd.x, cmd.y) };
+        case 'L': return { type: 'L', x: tx(cmd.x, cmd.y), y: ty(cmd.x, cmd.y) };
+        case 'C': return {
+          type: 'C',
+          x1: tx(cmd.x1, cmd.y1), y1: ty(cmd.x1, cmd.y1),
+          x2: tx(cmd.x2, cmd.y2), y2: ty(cmd.x2, cmd.y2),
+          x: tx(cmd.x, cmd.y), y: ty(cmd.x, cmd.y),
+        };
+        case 'Q': return {
+          type: 'Q',
+          x1: tx(cmd.x1, cmd.y1), y1: ty(cmd.x1, cmd.y1),
+          x: tx(cmd.x, cmd.y), y: ty(cmd.x, cmd.y),
+        };
+        case 'Z': return { type: 'Z' };
+      }
+    }),
+  );
+}
+
+/**
+ * Sample `count` evenly-spaced points (by arc length) along flattened paths,
+ * with the tangent angle at each point. Spans subpaths as one run.
+ */
+export function samplePathEvenly(
+  polys: Polyline[],
+  count: number,
+): { x: number; y: number; rotation: number; t: number }[] {
+  type Seg = { ax: number; ay: number; bx: number; by: number; len: number };
+  const segs: Seg[] = [];
+  for (const poly of polys) {
+    const pts = poly.closed ? [...poly.points, poly.points[0]] : poly.points;
+    for (let i = 1; i < pts.length; i++) {
+      const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      if (len > 0) segs.push({ ax: pts[i - 1].x, ay: pts[i - 1].y, bx: pts[i].x, by: pts[i].y, len });
+    }
+  }
+  const total = segs.reduce((sum, s) => sum + s.len, 0);
+  if (total === 0 || segs.length === 0) return [];
+
+  const out: { x: number; y: number; rotation: number; t: number }[] = [];
+  let segIdx = 0;
+  let walked = 0;
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0 : i / count; // closed-feel spacing: no doubled endpoint
+    const target = t * total;
+    while (segIdx < segs.length - 1 && walked + segs[segIdx].len < target) {
+      walked += segs[segIdx].len;
+      segIdx++;
+    }
+    const seg = segs[segIdx];
+    const local = seg.len === 0 ? 0 : (target - walked) / seg.len;
+    out.push({
+      x: seg.ax + (seg.bx - seg.ax) * local,
+      y: seg.ay + (seg.by - seg.ay) * local,
+      rotation: Math.atan2(seg.by - seg.ay, seg.bx - seg.ax),
+      t,
+    });
+  }
+  return out;
 }
 
 function sampleCount(controls: Pt[], step: number): number {

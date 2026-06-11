@@ -1,6 +1,16 @@
 import type { Registry } from '../engine/registry';
 import { BlurNode } from './blur';
 import { BooleanNode } from './boolean';
+import { DuplicatorNode, FlattenNode, PlaceNode, SplitNode } from './elements';
+import {
+  DrawLayoutNode,
+  FilterLayoutNode,
+  FunctionLayoutNode,
+  GridNode,
+  RandomLayoutNode,
+  SamplePathNode,
+  SortLayoutNode,
+} from './layout';
 import { NoiseNode } from './noise';
 import { OutlineNode } from './outline';
 import { OutputNode } from './output';
@@ -24,6 +34,9 @@ export function buildRegistry(): Registry {
     TextNode, ShapeNode, NoiseNode,
     OutlineNode, RasterizeNode, TraceNode,
     DisplaceNode, WarpNode, BooleanNode,
+    SplitNode, DuplicatorNode, PlaceNode, FlattenNode,
+    GridNode, RandomLayoutNode, SamplePathNode, FunctionLayoutNode,
+    FilterLayoutNode, SortLayoutNode, DrawLayoutNode,
     BlurNode, DitherNode, RecolorNode, ChromaKeyNode, AsciiNode,
     ToAlphaNode, CompositeNode,
     OutputNode,

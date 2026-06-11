@@ -34,7 +34,7 @@ export const TextNode: NodeDef = {
       }
     }
 
-    const value: TextValue = { kind: 'text', glyphs, fontKey, fontSize, width: x };
+    const value: TextValue = { kind: 'text', content, glyphs, fontKey, fontSize, width: x };
     return { out: value };
   },
 };

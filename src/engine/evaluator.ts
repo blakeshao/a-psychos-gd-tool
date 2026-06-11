@@ -123,6 +123,10 @@ function disposeOutputs(outputs: OutputValues, ctx: CookContext) {
   for (const value of Object.values(outputs)) {
     if (value.kind === 'raster' || value.kind === 'alpha') {
       ctx.gpu.pool.release(value.texture);
+    } else if (value.kind === 'elements') {
+      for (const item of value.items) {
+        if (item.content.kind === 'raster') ctx.gpu.pool.release(item.content.texture);
+      }
     }
   }
 }

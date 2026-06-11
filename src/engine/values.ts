@@ -23,6 +23,8 @@ export interface PositionedGlyph {
 
 export interface TextValue {
   kind: 'text';
+  /** the source string — Split needs it to find word boundaries */
+  content: string;
   glyphs: PositionedGlyph[];
   fontKey: string;
   fontSize: number;
@@ -59,6 +61,45 @@ export interface AlphaValue {
   height: number;
 }
 
-export type Value = TextValue | VectorValue | RasterValue | AlphaValue;
+/** translate ∘ rotate ∘ scale — applied scale-first when mapping points */
+export interface Transform2D {
+  x: number;
+  y: number;
+  rotation: number; // radians
+  scale: number;
+}
+
+export const IDENTITY: Transform2D = { x: 0, y: 0, rotation: 0, scale: 1 };
+
+/** One live sub-graphic: content + its own placement. Stays editable until Flatten. */
+export interface Element {
+  content: TextValue | VectorValue | RasterValue;
+  transform: Transform2D;
+  /** position in the source (glyph #, copy #) — survives Split/Duplicator, drives by-index Place */
+  index: number;
+  weight: number;
+}
+
+export interface ElementsValue {
+  kind: 'elements';
+  items: Element[];
+}
+
+/** A slot something can be placed into — position + tangent rotation + density weight. */
+export interface Placement {
+  x: number;
+  y: number;
+  rotation: number;
+  scale: number;
+  weight: number;
+  index: number;
+}
+
+export interface LayoutValue {
+  kind: 'layout';
+  placements: Placement[];
+}
+
+export type Value = TextValue | VectorValue | RasterValue | AlphaValue | ElementsValue | LayoutValue;
 
 export type OutputValues = Record<string, Value>;
