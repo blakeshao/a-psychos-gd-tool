@@ -7,9 +7,14 @@ import type { OutputValues, SocketType, Value } from './values';
 
 export interface SocketSpec {
   name: string;
-  type: SocketType;
+  /** a single type, or a union for inputs that accept several (e.g. raster | elements) */
+  type: SocketType | SocketType[];
   /** optional inputs may be left unwired; cook() receives no value for them */
   optional?: boolean;
+}
+
+export function socketTypes(spec: SocketSpec): SocketType[] {
+  return Array.isArray(spec.type) ? spec.type : [spec.type];
 }
 
 export type ParamSpec =
@@ -38,7 +43,13 @@ export interface NodeDef {
 
 export type Registry = Map<string, NodeDef>;
 
-/** "never coerced": a wire is legal only when the socket types match exactly. */
+/**
+ * "never coerced" applies to representation changes (vector→raster needs an
+ * explicit Rasterize). A union input socket accepting one of several types is
+ * not coercion — the value arrives unchanged; the node handles each kind.
+ */
 export function canConnect(from: SocketSpec, to: SocketSpec): boolean {
-  return from.type === to.type;
+  const fromTypes = socketTypes(from);
+  const toTypes = socketTypes(to);
+  return fromTypes.some((t) => toTypes.includes(t));
 }

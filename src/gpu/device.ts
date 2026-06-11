@@ -12,6 +12,7 @@ import {
   COMPOSITE_FS,
   DITHER_FS,
   FULLSCREEN_VS,
+  QUAD_SHADER,
   RECOLOR_FS,
   TO_ALPHA_FS,
 } from './shaders';
@@ -113,6 +114,67 @@ export class GpuContext {
     );
     this.asciiAtlas = { texture, glyphs: ramp.length };
     return this.asciiAtlas;
+  }
+
+  /** Clear a render target to a flat color. */
+  clear(dst: PooledTexture, color: { r: number; g: number; b: number; a: number }) {
+    const encoder = this.device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: dst.texture.createView(), loadOp: 'clear', storeOp: 'store', clearValue: color }],
+    });
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
+  }
+
+  /**
+   * Draw a textured quad over dst (contents preserved, src-over blending).
+   * coeffs: [a, b, c, d, tx, ty, w, h] — clip = [a b; c d]·local_px + [tx ty],
+   * local_px spanning the content size (w, h).
+   */
+  drawQuad(src: TexSource, dst: PooledTexture, coeffs: Float32Array<ArrayBuffer>) {
+    const key = `quad:${dst.format}`;
+    let pipeline = this.pipelines.get(key);
+    if (!pipeline) {
+      const module = this.device.createShaderModule({ code: QUAD_SHADER });
+      pipeline = this.device.createRenderPipeline({
+        layout: 'auto',
+        vertex: { module, entryPoint: 'vs' },
+        fragment: {
+          module,
+          entryPoint: 'fs',
+          targets: [{
+            format: dst.format,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+      this.pipelines.set(key, pipeline);
+    }
+    // uniform layout: abcd (vec4) + txty (vec2) + size (vec2) = 32 bytes
+    const u = new Float32Array(8);
+    u.set([coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5], coeffs[6], coeffs[7]]);
+    this.device.queue.writeBuffer(this.uniforms, 0, u);
+    const bindGroup = this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.sampler },
+        { binding: 1, resource: viewOf(src) },
+        { binding: 2, resource: { buffer: this.uniforms } },
+      ],
+    });
+    const encoder = this.device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: dst.texture.createView(), loadOp: 'load', storeOp: 'store' }],
+    });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(6);
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
   }
 
   /**

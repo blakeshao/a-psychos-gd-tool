@@ -4,6 +4,12 @@ A node-based graphic design tool. Types flow on typed wires — `text => vector 
 
 **Status: Phase 5.** Twenty-eight node types — the compositional lane is in. Split (characters/words, kerned positions + indices preserved), Duplicator, Place (cycle / by-index / shuffle, weight→scale/rotation binding), Flatten (the explicit elements→vector conversion). Layout generators: Grid, Random (generates standalone, jitters when wired), SamplePath (even arc-length + tangent rotation, weight = position along path), Function (circle/spiral/wave); modulators Filter (nth / weight threshold) and Sort (re-indexing); DrawLayout renders placements as debug geometry. Alpha Map layout and vector Slice still TODO.
 
+### The element model
+
+`elements` is **one type, singular or plural** — a lone vector/raster/text value lifts into a single-element list at any elements socket (containment, not coercion: the value is untouched). Element content can be **vector or raster** (or live text). **Output is the artboard**: it accepts `raster | elements`, and composites elements natively in z-order — vector/text content batches through the 2D tessellator, raster content quad-draws its texture with the element's transform, GPU-side. The `text => vector => raster` ladder governs *content conversions*; placing things on the artboard never needed it. Minimal scatter graph is 4 nodes: `Shape → Place ← Grid`, `Place → Output`.
+
+Union input sockets (white handles) accept several types — e.g. `Output.in: raster | elements`, `Place.elements: elements | vector | raster | text` — matching the spec's `To Alpha (raster | element => alpha)` pattern.
+
 ## Run
 
 ```sh

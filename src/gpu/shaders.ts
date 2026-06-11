@@ -154,6 +154,48 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
+// Textured quad with a 2D affine transform (content px -> clip space).
+// Used by the element renderer: one draw per element, alpha-blended over
+// the artboard (pipeline blend state does src-over; loadOp preserves).
+export const QUAD_SHADER = /* wgsl */ `
+struct QuadU {
+  // clip = [a b; c d] * local_px + [tx; ty]
+  abcd: vec4f,
+  txty: vec2f,
+  size: vec2f, // content size in px
+}
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> u: QuadU;
+
+struct QVSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> QVSOut {
+  // two-triangle quad over the unit square
+  var corners = array<vec2f, 6>(
+    vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
+    vec2f(0.0, 1.0), vec2f(1.0, 0.0), vec2f(1.0, 1.0));
+  let c = corners[i];
+  let local = c * u.size;
+  var out: QVSOut;
+  out.pos = vec4f(
+    u.abcd.x * local.x + u.abcd.y * local.y + u.txty.x,
+    u.abcd.z * local.x + u.abcd.w * local.y + u.txty.y,
+    0.0, 1.0);
+  out.uv = c;
+  return out;
+}
+
+@fragment
+fn fs(in: QVSOut) -> @location(0) vec4f {
+  return textureSample(tex, samp, in.uv);
+}
+`;
+
 // Blend overlay onto base, weighted by overlay alpha * opacity * mask.
 export const COMPOSITE_FS = /* wgsl */ `
 struct CompU { mode: f32, opacity: f32, _p2: f32, _p3: f32 }

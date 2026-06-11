@@ -50,7 +50,7 @@ export const RasterizeNode: NodeDef = {
   },
 };
 
-function appendPath(p: Path2D, cmds: PathCmd[]) {
+export function appendPath(p: Path2D, cmds: PathCmd[]) {
   for (const cmd of cmds) {
     switch (cmd.type) {
       case 'M': p.moveTo(cmd.x, cmd.y); break;

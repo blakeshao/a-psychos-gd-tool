@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import { edgeKey, hasPath, type Graph, type NodeId, type ParamValue } from './engine/graph';
+import { canConnect } from './engine/registry';
 import { registry } from './nodes';
 
 const initialGraph: Graph = {
@@ -37,7 +38,7 @@ export function wireIsValid(graph: Graph, w: WireSpec): boolean {
   const fromSpec = registry.get(fromNode.type)?.outputs.find((s) => s.name === w.sourceHandle);
   const toSpec = registry.get(toNode.type)?.inputs.find((s) => s.name === w.targetHandle);
   if (!fromSpec || !toSpec) return false;
-  if (fromSpec.type !== toSpec.type) return false; // never coerced
+  if (!canConnect(fromSpec, toSpec)) return false; // never coerced (unions are membership, not coercion)
   return !hasPath(graph, w.target, w.source); // no cycles
 }
 

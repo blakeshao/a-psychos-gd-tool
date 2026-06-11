@@ -118,15 +118,15 @@ export class Evaluator {
   }
 }
 
+// Ownership rule: a cache entry owns exactly the textures in its own
+// raster/alpha outputs. Raster content embedded in elements is NOT owned —
+// it belongs to the producing node's entry, and hash propagation guarantees
+// producer and consumer entries are always evicted in the same pass.
 function disposeOutputs(outputs: OutputValues, ctx: CookContext) {
   if (!ctx.gpu) return;
   for (const value of Object.values(outputs)) {
     if (value.kind === 'raster' || value.kind === 'alpha') {
       ctx.gpu.pool.release(value.texture);
-    } else if (value.kind === 'elements') {
-      for (const item of value.items) {
-        if (item.content.kind === 'raster') ctx.gpu.pool.release(item.content.texture);
-      }
     }
   }
 }

@@ -40,6 +40,21 @@ describe('wireIsValid', () => {
   it('rejects unknown sockets', () => {
     expect(wireIsValid(chain(), { source: 'raster1', sourceHandle: 'nope', target: 'out', targetHandle: 'in' })).toBe(false);
   });
+
+  it('union inputs accept any member type, reject the rest', () => {
+    const g = chain();
+    g.nodes.place1 = { id: 'place1', type: 'Place', params: {} };
+    g.nodes.grid1 = { id: 'grid1', type: 'Grid', params: {} };
+    // vector -> Place.elements (lifted single element)
+    expect(wireIsValid(g, { source: 'outline1', sourceHandle: 'out', target: 'place1', targetHandle: 'elements' })).toBe(true);
+    // raster -> Place.elements
+    expect(wireIsValid(g, { source: 'raster1', sourceHandle: 'out', target: 'place1', targetHandle: 'elements' })).toBe(true);
+    // elements -> Output.in (the artboard composites them)
+    expect(wireIsValid(g, { source: 'place1', sourceHandle: 'out', target: 'out', targetHandle: 'in' })).toBe(true);
+    // layout is NOT a member — still needs Place or DrawLayout first
+    expect(wireIsValid(g, { source: 'grid1', sourceHandle: 'out', target: 'out', targetHandle: 'in' })).toBe(false);
+    expect(wireIsValid(g, { source: 'grid1', sourceHandle: 'out', target: 'place1', targetHandle: 'layout' })).toBe(true);
+  });
 });
 
 describe('store actions', () => {

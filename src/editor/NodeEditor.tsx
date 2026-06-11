@@ -15,6 +15,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { edgeKey } from '../engine/graph';
+import { socketTypes } from '../engine/registry';
 import { registry } from '../nodes';
 import { useApp, wireIsValid } from '../store';
 import { GfxNode, SOCKET_COLORS } from './GfxNode';
@@ -41,7 +42,8 @@ export function NodeEditor() {
     () =>
       graph.edges.map((e) => {
         const fromDef = registry.get(graph.nodes[e.from.node]?.type ?? '');
-        const socketType = fromDef?.outputs.find((s) => s.name === e.from.socket)?.type;
+        const fromSpec = fromDef?.outputs.find((s) => s.name === e.from.socket);
+        const socketType = fromSpec ? socketTypes(fromSpec)[0] : undefined;
         return {
           id: edgeKey(e),
           source: e.from.node,

@@ -118,6 +118,36 @@ describe('SamplePath -> Place -> Flatten round trip', () => {
   });
 });
 
+describe('singular/plural lift', () => {
+  it('a lone vector placed onto a grid cycles onto every placement', async () => {
+    const hex = (await ShapeNode.cook({}, { kind: 'polygon', width: 40, height: 40, sides: 6 }, ctx))
+      .out as VectorValue;
+    const layout = (await GridNode.cook({}, { columns: 3, rows: 2, spacingX: 60, spacingY: 60 }, ctx))
+      .out as LayoutValue;
+    const placed = await PlaceNode.cook(
+      { elements: hex, layout }, // vector wired straight into the elements socket
+      { distribute: 'cycle', bindWeight: 'none', bindAmount: 1, seed: 0 },
+      ctx,
+    );
+    const items = (placed.out as ElementsValue).items;
+    expect(items).toHaveLength(6);
+    expect(items.every((e) => e.content === hex)).toBe(true); // shared content, six transforms
+  });
+
+  it('Duplicator lifts raster-like content and repeats elements', async () => {
+    const fakeRaster = { kind: 'raster', texture: {} as never, width: 32, height: 32 } as const;
+    const dup = await (await import('./elements')).DuplicatorNode.cook(
+      { in: fakeRaster },
+      { count: 4 },
+      ctx,
+    );
+    const items = (dup.out as ElementsValue).items;
+    expect(items).toHaveLength(4);
+    expect(items.map((e) => e.index)).toEqual([0, 1, 2, 3]);
+    expect(items.every((e) => e.content === fakeRaster)).toBe(true);
+  });
+});
+
 describe('Filter / Sort', () => {
   it('every-nth keeps each nth placement; sort by x re-indexes', async () => {
     const layout = (await GridNode.cook({}, { columns: 6, rows: 1, spacingX: 10, spacingY: 10 }, ctx))

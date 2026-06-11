@@ -10,9 +10,23 @@ import type {
   LayoutValue,
   PathCmd,
   TextValue,
+  Value,
   VectorValue,
 } from '../engine/values';
 import { latticeHash } from '../util/noise';
+
+/**
+ * elements is one type, singular or plural: a lone vector/raster/text value
+ * lifts to a single-element list. Wrapping is containment, not coercion —
+ * the value itself is untouched.
+ */
+export function asElements(v: Value): Element[] {
+  if (v.kind === 'elements') return v.items;
+  if (v.kind === 'vector' || v.kind === 'raster' || v.kind === 'text') {
+    return [{ content: v, transform: { x: 0, y: 0, rotation: 0, scale: 1 }, index: 0, weight: 1 }];
+  }
+  throw new Error(`cannot treat ${v.kind} as elements`);
+}
 
 export const SplitNode: NodeDef = {
   type: 'Split',
@@ -77,20 +91,22 @@ export const SplitNode: NodeDef = {
 
 export const DuplicatorNode: NodeDef = {
   type: 'Duplicator',
-  inputs: [{ name: 'in', type: 'vector' }],
+  inputs: [{ name: 'in', type: ['vector', 'raster', 'text', 'elements'] }],
   outputs: [{ name: 'out', type: 'elements' }],
   params: [{ name: 'count', kind: 'number', default: 12, min: 1, max: 500, step: 1 }],
   cook(inputs, params) {
-    const src = inputs.in as VectorValue;
+    const base = asElements(inputs.in as Value);
     const count = Math.round(Number(params.count));
     const items: Element[] = [];
     for (let i = 0; i < count; i++) {
-      items.push({
-        content: src, // copies share the source paths; transforms differ after Place
-        transform: { x: 0, y: 0, rotation: 0, scale: 1 },
-        index: i,
-        weight: count === 1 ? 1 : i / (count - 1),
-      });
+      for (const el of base) {
+        items.push({
+          content: el.content, // copies share content; transforms differ after Place
+          transform: { ...el.transform },
+          index: items.length,
+          weight: count === 1 ? 1 : i / (count - 1),
+        });
+      }
     }
     const value: ElementsValue = { kind: 'elements', items };
     return { out: value };
@@ -100,7 +116,7 @@ export const DuplicatorNode: NodeDef = {
 export const PlaceNode: NodeDef = {
   type: 'Place',
   inputs: [
-    { name: 'elements', type: 'elements' },
+    { name: 'elements', type: ['elements', 'vector', 'raster', 'text'] },
     { name: 'layout', type: 'layout' },
   ],
   outputs: [{ name: 'out', type: 'elements' }],
@@ -111,7 +127,7 @@ export const PlaceNode: NodeDef = {
     { name: 'seed', kind: 'number', default: 0, min: 0, max: 9999, step: 1 },
   ],
   cook(inputs, params) {
-    const elements = (inputs.elements as ElementsValue).items;
+    const elements = asElements(inputs.elements as Value);
     const layout = (inputs.layout as LayoutValue).placements;
     const amount = Number(params.bindAmount);
     const seed = Number(params.seed);
