@@ -3,15 +3,7 @@
 
 import type { NodeDef } from '../engine/registry';
 import type { RasterValue } from '../engine/values';
-
-/** integer lattice hash -> 0..1, stable across runs */
-function latticeHash(ix: number, iy: number, seed: number): number {
-  let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(seed + 1, 2246822519);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
-}
-
-const smooth = (t: number) => t * t * (3 - 2 * t);
+import { latticeHash, valueNoise2D } from '../util/noise';
 
 export const NoiseNode: NodeDef = {
   type: 'Noise',
@@ -36,17 +28,7 @@ export const NoiseNode: NodeDef = {
     const data = new Uint8Array(width * height * 4);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        let v: number;
-        if (grain) {
-          v = latticeHash(x, y, seed);
-        } else {
-          const fx = x / scale, fy = y / scale;
-          const ix = Math.floor(fx), iy = Math.floor(fy);
-          const tx = smooth(fx - ix), ty = smooth(fy - iy);
-          const a = latticeHash(ix, iy, seed), b = latticeHash(ix + 1, iy, seed);
-          const c = latticeHash(ix, iy + 1, seed), d = latticeHash(ix + 1, iy + 1, seed);
-          v = (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
-        }
+        const v = grain ? latticeHash(x, y, seed) : valueNoise2D(x / scale, y / scale, seed);
         const i = (y * width + x) * 4;
         const byte = Math.round(v * 255);
         data[i] = byte; data[i + 1] = byte; data[i + 2] = byte; data[i + 3] = 255;

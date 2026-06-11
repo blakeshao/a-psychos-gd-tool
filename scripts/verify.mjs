@@ -1,8 +1,8 @@
-// Phase 3 gate, driven in headless Chrome:
-//  1. build a 12-node graph using every raster op via the dev store handle
-//  2. confirm it cooks clean (no cook error, all nodes in the log)
-//  3. stress: change Blur radius at ~60Hz for 2s — pool allocation must stay
-//     flat (recycling, not allocating) and cooks must keep up
+// Phase 4 gate, driven in headless Chrome:
+//  A. vector lane: Text -> Outline -> Boolean(subtract ellipse) -> Displace
+//     -> Warp -> Rasterize -> Output
+//  B. conversion round trip: ...Rasterize -> Trace (async GPU readback) ->
+//     Rasterize -> Output; Trace must cook async and then HIT on re-cook
 // Usage: node scripts/verify.mjs [url]
 import puppeteer from 'puppeteer-core';
 
@@ -24,10 +24,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const readLog = () =>
   page.$$eval('.cook-log li', (lis) => lis.map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
-const poolText = () => page.$eval('.pool', (el) => el.textContent);
+const cookError = async () => {
+  const err = await page.$('.cook-error');
+  return err ? await err.evaluate((el) => el.textContent) : null;
+};
 
-// 1. the kitchen-sink graph: text -> blur -> ascii -> recolor -> dither -> composite
-//    with a value-noise mask and a grain overlay
+// --- A: vector ops + boolean ---
 await page.evaluate(() => {
   const N = (id, type, params, x, y) => [id, { id, type, params, position: { x, y } }];
   const E = (fn, fs, tn, ts) => ({ from: { node: fn, socket: fs }, to: { node: tn, socket: ts } });
@@ -37,64 +39,68 @@ await page.evaluate(() => {
       nodes: Object.fromEntries([
         N('text1', 'Text', { content: 'PSYCHO', fontSize: 200, font: 'default' }, 20, 40),
         N('outline1', 'Outline', {}, 200, 40),
-        N('raster1', 'Rasterize', { width: 768, height: 512 }, 380, 40),
-        N('blur1', 'Blur', { radius: 3 }, 560, 40),
-        N('ascii1', 'ASCII', { cell: 8 }, 720, 40),
-        N('recolor1', 'Recolor', { dark: '#1c1240', light: '#ffd27f' }, 880, 40),
-        N('dither1', 'Dither', { levels: 4, scale: 2 }, 1060, 40),
-        N('noise1', 'Noise', { width: 768, height: 512, mode: 'value', scale: 96, seed: 7 }, 560, 220),
-        N('toalpha1', 'ToAlpha', { source: 'luminance', invert: 'no' }, 740, 220),
-        N('noise2', 'Noise', { width: 768, height: 512, mode: 'grain', scale: 1, seed: 3 }, 880, 300),
-        N('comp1', 'Composite', { mode: 'multiply', opacity: 0.5 }, 1230, 140),
-        N('out', 'Output', {}, 1390, 140),
+        N('shape1', 'Shape', { kind: 'ellipse', width: 620, height: 150, sides: 6 }, 200, 200),
+        N('bool1', 'Boolean', { op: 'subtract' }, 400, 120),
+        N('disp1', 'Displace', { amount: 5, scale: 50, seed: 3 }, 580, 120),
+        N('warp1', 'Warp', { axis: 'y', amplitude: 14, wavelength: 320, phase: 0 }, 760, 120),
+        N('raster1', 'Rasterize', { width: 768, height: 512 }, 940, 120),
+        N('out', 'Output', {}, 1120, 120),
       ]),
       edges: [
         E('text1', 'out', 'outline1', 'text'),
-        E('outline1', 'out', 'raster1', 'vector'),
-        E('raster1', 'out', 'blur1', 'in'),
-        E('blur1', 'out', 'ascii1', 'in'),
-        E('ascii1', 'out', 'recolor1', 'in'),
-        E('recolor1', 'out', 'dither1', 'in'),
-        E('dither1', 'out', 'comp1', 'base'),
-        E('noise2', 'out', 'comp1', 'overlay'),
-        E('noise1', 'out', 'toalpha1', 'in'),
-        E('toalpha1', 'out', 'comp1', 'mask'),
-        E('comp1', 'out', 'out', 'in'),
+        E('outline1', 'out', 'bool1', 'a'),
+        E('shape1', 'out', 'bool1', 'b'),
+        E('bool1', 'out', 'disp1', 'in'),
+        E('disp1', 'out', 'warp1', 'in'),
+        E('warp1', 'out', 'raster1', 'vector'),
+        E('raster1', 'out', 'out', 'in'),
       ],
     },
   });
 });
-await sleep(800);
+await sleep(900);
 
-console.log('--- cook: kitchen-sink graph (12 nodes) ---');
+console.log('--- A: vector lane (boolean subtract + displace + warp) ---');
 for (const line of await readLog()) console.log(line);
-const err = await page.$('.cook-error');
-if (err) console.log('COOK ERROR:', await err.evaluate((el) => el.textContent));
-console.log('---', await poolText());
+const errA = await cookError();
+if (errA) console.log('COOK ERROR:', errA);
+await page.screenshot({ path: '/tmp/nodegfx-vector.png' });
 
-await page.screenshot({ path: '/tmp/nodegfx-verify.png' });
-
-// 2. stress: ~60Hz blur-radius changes for 2 seconds
-const result = await page.evaluate(async () => {
+// --- B: append Trace -> Rasterize, rewire Output ---
+await page.evaluate(() => {
   const app = globalThis.__app;
-  let ticks = 0;
-  const t0 = performance.now();
-  await new Promise((resolve) => {
-    const iv = setInterval(() => {
-      ticks++;
-      app.getState().setParam('blur1', 'radius', 1 + (ticks % 30));
-      if (performance.now() - t0 > 2000) { clearInterval(iv); resolve(); }
-    }, 16);
+  const g = app.getState().graph;
+  const E = (fn, fs, tn, ts) => ({ from: { node: fn, socket: fs }, to: { node: tn, socket: ts } });
+  app.setState({
+    graph: {
+      nodes: {
+        ...g.nodes,
+        trace1: { id: 'trace1', type: 'Trace', params: { smoothness: 1, minArea: 8, ignoreLight: 'yes' }, position: { x: 940, y: 280 } },
+        raster2: { id: 'raster2', type: 'Rasterize', params: { width: 768, height: 512 }, position: { x: 1120, y: 280 } },
+      },
+      edges: [
+        ...g.edges.filter((e) => e.to.node !== 'out'),
+        E('raster1', 'out', 'trace1', 'in'),
+        E('trace1', 'out', 'raster2', 'vector'),
+        E('raster2', 'out', 'out', 'in'),
+      ],
+    },
   });
-  return { ticks };
 });
-await sleep(500);
+await sleep(1200);
 
-console.log(`--- stress: ${result.ticks} param changes in 2s ---`);
-console.log('---', await poolText(), '(must stay small/flat)');
-console.log('--- post-stress log ---');
+console.log('--- B: + Trace (async readback) -> Rasterize ---');
+for (const line of await readLog()) console.log(line);
+const errB = await cookError();
+if (errB) console.log('COOK ERROR:', errB);
+
+// nudge a downstream param: Trace must HIT (its result is cached)
+await page.evaluate(() => globalThis.__app.getState().setParam('raster2', 'width', 760));
+await sleep(500);
+console.log('--- B2: downstream param change — Trace should HIT ---');
 for (const line of await readLog()) console.log(line);
 
-await page.screenshot({ path: '/tmp/nodegfx-stress.png' });
-console.log('screenshots: /tmp/nodegfx-verify.png /tmp/nodegfx-stress.png');
+console.log('---', await page.$eval('.pool', (el) => el.textContent));
+await page.screenshot({ path: '/tmp/nodegfx-trace.png' });
+console.log('screenshots: /tmp/nodegfx-vector.png /tmp/nodegfx-trace.png');
 await browser.close();

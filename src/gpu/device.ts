@@ -115,6 +115,34 @@ export class GpuContext {
     return this.asciiAtlas;
   }
 
+  /**
+   * GPU -> CPU readback. The one expensive direction — only Trace and PNG
+   * export should ever call this; everything else stays on the GPU.
+   */
+  async readback(t: PooledTexture): Promise<ImageData> {
+    const bytesPerRow = Math.ceil((t.width * 4) / 256) * 256; // copy alignment rule
+    const buffer = this.device.createBuffer({
+      size: bytesPerRow * t.height,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    const encoder = this.device.createCommandEncoder();
+    encoder.copyTextureToBuffer(
+      { texture: t.texture },
+      { buffer, bytesPerRow },
+      { width: t.width, height: t.height },
+    );
+    this.device.queue.submit([encoder.finish()]);
+    await buffer.mapAsync(GPUMapMode.READ);
+    const mapped = new Uint8Array(buffer.getMappedRange());
+    const pixels = new Uint8ClampedArray(t.width * t.height * 4);
+    for (let y = 0; y < t.height; y++) {
+      pixels.set(mapped.subarray(y * bytesPerRow, y * bytesPerRow + t.width * 4), y * t.width * 4);
+    }
+    buffer.unmap();
+    buffer.destroy();
+    return new ImageData(pixels, t.width, t.height);
+  }
+
   /** One fullscreen fragment pass: sample srcs, write dst. */
   runPass(
     name: string,

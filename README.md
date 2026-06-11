@@ -2,7 +2,7 @@
 
 A node-based graphic design tool. Types flow on typed wires — `text => vector => raster`, every step explicit, never coerced.
 
-**Status: Phase 3.** Twelve node types. New raster lane: Noise (deterministic value/grain source), Dither (Bayer), Recolor (duotone), Chroma Key, ASCII (glyph-atlas rebuild), To Alpha, and Composite (blend modes + optional alpha mask — the first multi-input, optional-input node). Every op is one WGSL pass on the shared fullscreen-pass frame; param drags at 60Hz recycle pool textures instead of allocating.
+**Status: Phase 4.** Seventeen node types across the full ladder. Vector lane: Shape (rect/ellipse/polygon), Displace and Warp (flatten-then-deform on the shared path utils), Boolean (Paper.js union/subtract/intersect on pre-flattened polygons). Conversions both ways: Rasterize (vector→raster) and Trace (raster→vector via async GPU readback + imagetracerjs — cooks once, then cache-hits like any other node). Vector Slice is still TODO.
 
 ## Run
 
@@ -26,8 +26,8 @@ npm test                # headless engine tests — cache + pool, no GPU needed
 
 1. ~~Engine spine + Text→Output slice~~
 2. ~~Node editor wired to the engine; type-checking on drag~~
-3. ~~Raster breadth: Noise, Dither, Recolor, Chroma Key, ASCII, To Alpha, Composite~~ ← here
-4. Vector ops + Trace/To Alpha conversions
+3. ~~Raster breadth: Noise, Dither, Recolor, Chroma Key, ASCII, To Alpha, Composite~~
+4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ ← here (vector Slice deferred)
 5. Elements & layout: Split, Duplicator, Grid, Sample Path, Place…
 6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)
 7. Persistence, export, undo

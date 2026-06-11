@@ -1,5 +1,6 @@
 import type { Registry } from '../engine/registry';
 import { BlurNode } from './blur';
+import { BooleanNode } from './boolean';
 import { NoiseNode } from './noise';
 import { OutlineNode } from './outline';
 import { OutputNode } from './output';
@@ -12,13 +13,17 @@ import {
   RecolorNode,
   ToAlphaNode,
 } from './rasterOps';
+import { ShapeNode } from './shape';
 import { TextNode } from './text';
+import { TraceNode } from './trace';
+import { DisplaceNode, WarpNode } from './vectorOps';
 
 export function buildRegistry(): Registry {
   const registry: Registry = new Map();
   for (const def of [
-    TextNode, NoiseNode,
-    OutlineNode, RasterizeNode,
+    TextNode, ShapeNode, NoiseNode,
+    OutlineNode, RasterizeNode, TraceNode,
+    DisplaceNode, WarpNode, BooleanNode,
     BlurNode, DitherNode, RecolorNode, ChromaKeyNode, AsciiNode,
     ToAlphaNode, CompositeNode,
     OutputNode,

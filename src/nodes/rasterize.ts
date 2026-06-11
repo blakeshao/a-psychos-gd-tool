@@ -32,9 +32,11 @@ export const RasterizeNode: NodeDef = {
     const b = vector.bounds;
     c2d.translate(width / 2 - (b.x + b.width / 2), height / 2 - (b.y + b.height / 2));
     c2d.fillStyle = '#000000';
-    for (const path of vector.paths) {
-      c2d.fill(toPath2D(path));
-    }
+    // one fill across ALL subpaths: hole contours must subtract via nonzero
+    // winding, which only works inside a single path
+    const combined = new Path2D();
+    for (const path of vector.paths) appendPath(combined, path);
+    c2d.fill(combined);
 
     const t = gpu.pool.acquire(width, height);
     gpu.device.queue.copyExternalImageToTexture(
@@ -48,8 +50,7 @@ export const RasterizeNode: NodeDef = {
   },
 };
 
-function toPath2D(cmds: PathCmd[]): Path2D {
-  const p = new Path2D();
+function appendPath(p: Path2D, cmds: PathCmd[]) {
   for (const cmd of cmds) {
     switch (cmd.type) {
       case 'M': p.moveTo(cmd.x, cmd.y); break;
@@ -59,5 +60,4 @@ function toPath2D(cmds: PathCmd[]): Path2D {
       case 'Z': p.closePath(); break;
     }
   }
-  return p;
 }
