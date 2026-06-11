@@ -1,0 +1,62 @@
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  background: #111;
+  color: #ddd;
+  font-size: 12px;
+}
+
+.app { display: flex; height: 100vh; }
+
+.sidebar {
+  width: 300px;
+  padding: 14px;
+  overflow-y: auto;
+  border-right: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+
+.sidebar h1 { font-size: 14px; margin-bottom: 14px; }
+.phase { color: #777; font-weight: normal; font-size: 11px; }
+
+.node-panel { margin-bottom: 14px; padding: 10px; background: #1a1a1a; border-radius: 6px; }
+.node-panel h2 { font-size: 12px; margin-bottom: 8px; }
+.node-id { color: #666; font-weight: normal; }
+
+.param { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.param > span:first-child { width: 64px; color: #999; flex-shrink: 0; }
+.param input[type='range'] { flex: 1; min-width: 0; }
+.param input[type='text'] {
+  flex: 1; min-width: 0;
+  background: #0d0d0d; border: 1px solid #333; color: #ddd;
+  padding: 4px 6px; border-radius: 4px; font: inherit;
+}
+.param-value { width: 32px; text-align: right; color: #888; }
+
+.cook-log { margin-top: 18px; }
+.cook-log h2 { font-size: 12px; margin-bottom: 8px; }
+.pool { color: #666; font-weight: normal; font-size: 10px; }
+.cook-log ul { list-style: none; }
+.cook-log li { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+.badge { width: 38px; text-align: center; border-radius: 3px; font-size: 10px; padding: 1px 0; }
+.hit .badge { background: #11331a; color: #5fce7a; }
+.miss .badge { background: #33210f; color: #e8a04c; }
+.ev-node { color: #ddd; }
+.ev-id { color: #666; }
+.ev-ms { margin-left: auto; color: #888; }
+.cook-error { color: #e96a6a; margin-bottom: 8px; white-space: pre-wrap; }
+
+.viewport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #161616;
+  background-image: radial-gradient(#222 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.viewport canvas { max-width: 90%; max-height: 90%; box-shadow: 0 8px 40px rgba(0,0,0,.5); }
+
+.boot-msg { padding: 40px; color: #888; }
+.boot-msg code { color: #bbb; }
