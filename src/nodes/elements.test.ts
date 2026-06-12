@@ -23,7 +23,7 @@ let ctx: CookContext;
 beforeAll(() => {
   const buf = readFileSync(join(__dirname, '../../public/fonts/JetBrainsMono-Regular.ttf'));
   const font = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-  ctx = { gpu: null, fonts: new Map([['default', font]]) };
+  ctx = { gpu: null, fonts: new Map([['default', font]]), frame: { width: 768, height: 512 } };
 });
 
 async function shape(content: string): Promise<TextValue> {

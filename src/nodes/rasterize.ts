@@ -1,5 +1,6 @@
-// Rasterize (vector => raster) — the CPU→GPU boundary crossing. Resolution is
-// introduced HERE, by an explicit param, and everything downstream inherits it.
+// Rasterize (vector => raster) — the CPU→GPU boundary crossing. Pixels are
+// produced at the document's frame size, so the whole raster lane shares
+// one resolution.
 //
 // Scaffold note: paths are drawn via OffscreenCanvas 2D (the browser is the
 // tessellator) and uploaded once. Real GPU tessellation can replace the body
@@ -12,16 +13,13 @@ export const RasterizeNode: NodeDef = {
   type: 'Rasterize',
   inputs: [{ name: 'vector', type: 'vector' }],
   outputs: [{ name: 'out', type: 'raster' }],
-  params: [
-    { name: 'width', kind: 'number', default: 768, min: 16, max: 4096, step: 1 },
-    { name: 'height', kind: 'number', default: 512, min: 16, max: 4096, step: 1 },
-  ],
-  cook(inputs, params, ctx) {
+  params: [],
+  usesFrame: true,
+  cook(inputs, _params, ctx) {
     const gpu = ctx.gpu;
     if (!gpu) throw new Error('Rasterize needs a GPU context');
     const vector = inputs.vector as VectorValue;
-    const width = Math.round(Number(params.width));
-    const height = Math.round(Number(params.height));
+    const { width, height } = ctx.frame;
 
     const canvas = new OffscreenCanvas(width, height);
     const c2d = canvas.getContext('2d')!;

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as opentype from 'opentype.js';
 import type { Font } from 'opentype.js';
-import type { Graph, NodeId, ParamValue } from './engine/graph';
+import { DEFAULT_FRAME, type Graph, type NodeId, type ParamValue } from './engine/graph';
 import { Evaluator, type CookEvent } from './engine/evaluator';
 import type { CookContext, ParamSpec } from './engine/registry';
 import type { RasterValue } from './engine/values';
@@ -39,6 +39,7 @@ export default function App() {
   const graph = useApp((s) => s.graph);
   const selectedNodeId = useApp((s) => s.selectedNodeId);
   const setParam = useApp((s) => s.setParam);
+  const setFrame = useApp((s) => s.setFrame);
 
   const [status, setStatus] = useState<Status>('booting');
   const [events, setEvents] = useState<CookEvent[]>([]);
@@ -46,7 +47,7 @@ export default function App() {
   const [cookError, setCookError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const ctxRef = useRef<CookContext | null>(null);
+  const ctxRef = useRef<Omit<CookContext, 'frame'> | null>(null);
   const evaluatorRef = useRef(new Evaluator(registry));
   const busyRef = useRef(false);
   const queuedRef = useRef<Graph | null>(null);
@@ -67,11 +68,13 @@ export default function App() {
   }, []);
 
   const runCook = useCallback(async (g: Graph) => {
-    const ctx = ctxRef.current;
+    const base = ctxRef.current;
     const canvas = canvasRef.current;
-    if (!ctx?.gpu || !canvas) return;
+    if (!base?.gpu || !canvas) return;
+    const gpu = base.gpu;
     if (busyRef.current) { queuedRef.current = g; return; }
     busyRef.current = true;
+    const ctx: CookContext = { ...base, frame: g.frame ?? DEFAULT_FRAME };
     try {
       const outputId = findOutputNode(g);
       if (!outputId) { setCookError('add an Output node to cook the graph'); return; }
@@ -79,9 +82,9 @@ export default function App() {
       const raster = result.outputs.out as RasterValue;
       canvas.width = raster.width;
       canvas.height = raster.height;
-      ctx.gpu.present(raster.texture, canvas);
+      gpu.present(raster.texture, canvas);
       setEvents([...evaluatorRef.current.events]);
-      setPoolStats(ctx.gpu.pool.stats());
+      setPoolStats(gpu.pool.stats());
       setCookError(null);
     } catch (err) {
       setCookError(err instanceof Error ? err.message : String(err));
@@ -109,6 +112,29 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <h1>nodegfx <span className="phase">phase 2</span></h1>
+        <section className="node-panel frame-config">
+          <h2>frame</h2>
+          <label className="param">
+            <span>width</span>
+            <input
+              type="number"
+              min={16}
+              max={4096}
+              value={(graph.frame ?? DEFAULT_FRAME).width}
+              onChange={(e) => setFrame({ ...(graph.frame ?? DEFAULT_FRAME), width: Number(e.target.value) })}
+            />
+          </label>
+          <label className="param">
+            <span>height</span>
+            <input
+              type="number"
+              min={16}
+              max={4096}
+              value={(graph.frame ?? DEFAULT_FRAME).height}
+              onChange={(e) => setFrame({ ...(graph.frame ?? DEFAULT_FRAME), height: Number(e.target.value) })}
+            />
+          </label>
+        </section>
         <section className="node-panel inspector">
           {selected && selectedDef ? (
             <>

@@ -27,6 +27,8 @@ export interface CookContext {
   /** null in headless tests — CPU nodes must not touch it */
   gpu: GpuContext | null;
   fonts: Map<string, Font>;
+  /** the document's artboard size — resolution for every frame-aware node */
+  frame: { width: number; height: number };
 }
 
 export interface NodeDef {
@@ -34,6 +36,8 @@ export interface NodeDef {
   inputs: SocketSpec[];
   outputs: SocketSpec[];
   params: ParamSpec[];
+  /** set when cook() reads ctx.frame — the evaluator folds the frame into this node's hash */
+  usesFrame?: boolean;
   cook(
     inputs: Record<string, Value>,
     params: Record<string, ParamValue>,

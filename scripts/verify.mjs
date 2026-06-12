@@ -1,8 +1,6 @@
-// Verifies the elements-native artboard:
-//  A. Shape -> Place.elements (single lifted), Function(spiral) layout,
-//     Place.out -> Output.in DIRECTLY — no Flatten, no Rasterize.
-//  B. raster content: Noise -> Duplicator -> Place(Grid) -> Output; the
-//     artboard quad-draws each texture with its transform, in z-order.
+// Frame config gate: editing the frame in the sidebar re-cooks exactly the
+// frame-aware nodes (Rasterize/Noise/Output) and their descendants — Text and
+// vector ops stay cached — and the artboard canvas takes the new size.
 // Usage: node scripts/verify.mjs [url]
 import puppeteer from 'puppeteer-core';
 
@@ -24,73 +22,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const readLog = () =>
   page.$$eval('.cook-log li', (lis) => lis.map((li) => li.textContent.replace(/\s+/g, ' ').trim()));
-const cookError = async () => {
-  const err = await page.$('.cook-error');
-  return err ? await err.evaluate((el) => el.textContent) : null;
-};
+const canvasSize = () =>
+  page.$eval('.viewport canvas', (c) => `${c.width}x${c.height}`);
 
-// --- A: vector elements straight to the artboard ---
-await page.evaluate(() => {
-  const N = (id, type, params, x, y) => [id, { id, type, params, position: { x, y } }];
-  const E = (fn, fs, tn, ts) => ({ from: { node: fn, socket: fs }, to: { node: tn, socket: ts } });
-  globalThis.__app.setState({
-    selectedNodeId: null,
-    graph: {
-      nodes: Object.fromEntries([
-        N('shape1', 'Shape', { kind: 'polygon', width: 70, height: 70, sides: 3 }, 20, 40),
-        N('fn1', 'Function', { fn: 'spiral', count: 48, radius: 220, turns: 3, spacing: 40 }, 20, 200),
-        N('place1', 'Place', { distribute: 'cycle', bindWeight: 'scale', bindAmount: 0.85, seed: 0 }, 240, 120),
-        N('out', 'Output', { width: 768, height: 512, background: '#f3ead8' }, 430, 120),
-      ]),
-      edges: [
-        E('shape1', 'out', 'place1', 'elements'), // vector → elements socket (lift)
-        E('fn1', 'out', 'place1', 'layout'),
-        E('place1', 'out', 'out', 'in'),          // elements → Output (artboard composites)
-      ],
-    },
-  });
-});
-await sleep(900);
-
-console.log('--- A: Shape -> Place(spiral) -> Output, 4 nodes total ---');
+console.log('--- cook 1 (default graph, default frame) ---');
 for (const line of await readLog()) console.log(line);
-const errA = await cookError();
-if (errA) console.log('COOK ERROR:', errA);
-await page.screenshot({ path: '/tmp/nodegfx-spiral.png' });
+console.log('canvas:', await canvasSize());
 
-// --- B: raster elements on the artboard ---
+// type a new frame width into the sidebar config
 await page.evaluate(() => {
-  const N = (id, type, params, x, y) => [id, { id, type, params, position: { x, y } }];
-  const E = (fn, fs, tn, ts) => ({ from: { node: fn, socket: fs }, to: { node: tn, socket: ts } });
-  globalThis.__app.setState({
-    selectedNodeId: null,
-    graph: {
-      nodes: Object.fromEntries([
-        N('noise1', 'Noise', { width: 96, height: 96, mode: 'value', scale: 24, seed: 5 }, 20, 40),
-        N('dup1', 'Duplicator', { count: 12 }, 200, 40),
-        N('grid1', 'Grid', { columns: 4, rows: 3, spacingX: 150, spacingY: 140 }, 20, 200),
-        N('rand1', 'Random', { count: 24, areaWidth: 600, areaHeight: 400, offset: 20, rotate: 0.4, scaleJitter: 0.3, seed: 9 }, 200, 200),
-        N('place1', 'Place', { distribute: 'cycle', bindWeight: 'none', bindAmount: 1, seed: 0 }, 420, 120),
-        N('out', 'Output', { width: 768, height: 512, background: '#101018' }, 610, 120),
-      ]),
-      edges: [
-        E('noise1', 'out', 'dup1', 'in'),         // raster → Duplicator (lift)
-        E('dup1', 'out', 'place1', 'elements'),
-        E('grid1', 'out', 'rand1', 'layout'),     // grid jittered by Random
-        E('rand1', 'out', 'place1', 'layout'),
-        E('place1', 'out', 'out', 'in'),
-      ],
-    },
-  });
+  const input = document.querySelector('.frame-config input[type=number]');
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  setter.call(input, '1024');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 });
-await sleep(900);
+await sleep(500);
 
-console.log('--- B: Noise -> Duplicator -> Place(jittered grid) -> Output ---');
+console.log('--- frame width 768 -> 1024 via UI ---');
 for (const line of await readLog()) console.log(line);
-const errB = await cookError();
-if (errB) console.log('COOK ERROR:', errB);
-
+console.log('canvas:', await canvasSize());
+const err = await page.$('.cook-error');
+if (err) console.log('COOK ERROR:', await err.evaluate((el) => el.textContent));
 console.log('---', await page.$eval('.pool', (el) => el.textContent));
-await page.screenshot({ path: '/tmp/nodegfx-rasterel.png' });
-console.log('screenshots: /tmp/nodegfx-spiral.png /tmp/nodegfx-rasterel.png');
+
+await page.screenshot({ path: '/tmp/nodegfx-frame.png' });
+console.log('screenshot: /tmp/nodegfx-frame.png');
 await browser.close();

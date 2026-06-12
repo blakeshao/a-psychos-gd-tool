@@ -17,9 +17,18 @@ export interface Edge {
   to: { node: NodeId; socket: string }; // an input socket name
 }
 
+export interface Frame {
+  width: number;
+  height: number;
+}
+
+export const DEFAULT_FRAME: Frame = { width: 768, height: 512 };
+
 export interface Graph {
   nodes: Record<NodeId, NodeInstance>;
   edges: Edge[];
+  /** the artboard/canvas size — every frame-aware operator (Rasterize, Noise, Output) cooks at this */
+  frame?: Frame;
 }
 
 /** Is `to` reachable downstream of `from`? Used to reject wires that would create a cycle. */

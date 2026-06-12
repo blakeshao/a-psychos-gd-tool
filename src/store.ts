@@ -3,17 +3,26 @@
 // evaluator only ever reads it.
 
 import { create } from 'zustand';
-import { edgeKey, hasPath, type Graph, type NodeId, type ParamValue } from './engine/graph';
+import {
+  DEFAULT_FRAME,
+  edgeKey,
+  hasPath,
+  type Frame,
+  type Graph,
+  type NodeId,
+  type ParamValue,
+} from './engine/graph';
 import { canConnect } from './engine/registry';
 import { registry } from './nodes';
 
 const initialGraph: Graph = {
+  frame: { ...DEFAULT_FRAME },
   nodes: {
     text1: { id: 'text1', type: 'Text', params: { content: 'PSYCHO', fontSize: 160, font: 'default' }, position: { x: 30, y: 80 } },
     outline1: { id: 'outline1', type: 'Outline', params: {}, position: { x: 230, y: 80 } },
-    raster1: { id: 'raster1', type: 'Rasterize', params: { width: 768, height: 512 }, position: { x: 420, y: 80 } },
+    raster1: { id: 'raster1', type: 'Rasterize', params: {}, position: { x: 420, y: 80 } },
     blur1: { id: 'blur1', type: 'Blur', params: { radius: 8 }, position: { x: 620, y: 80 } },
-    out: { id: 'out', type: 'Output', params: { width: 768, height: 512, background: '#ffffff' }, position: { x: 800, y: 80 } },
+    out: { id: 'out', type: 'Output', params: { background: '#ffffff' }, position: { x: 800, y: 80 } },
   },
   edges: [
     { from: { node: 'text1', socket: 'out' }, to: { node: 'outline1', socket: 'text' } },
@@ -46,6 +55,7 @@ interface AppStore {
   graph: Graph;
   selectedNodeId: NodeId | null;
   select: (id: NodeId | null) => void;
+  setFrame: (frame: Frame) => void;
   setParam: (nodeId: NodeId, name: string, value: ParamValue) => void;
   moveNode: (nodeId: NodeId, position: { x: number; y: number }) => void;
   addNode: (type: string, position: { x: number; y: number }) => void;
@@ -61,6 +71,17 @@ export const useApp = create<AppStore>((set) => ({
   selectedNodeId: null,
 
   select: (id) => set({ selectedNodeId: id }),
+
+  setFrame: (frame) =>
+    set((s) => ({
+      graph: {
+        ...s.graph,
+        frame: {
+          width: Math.max(16, Math.min(4096, Math.round(frame.width) || DEFAULT_FRAME.width)),
+          height: Math.max(16, Math.min(4096, Math.round(frame.height) || DEFAULT_FRAME.height)),
+        },
+      },
+    })),
 
   setParam: (nodeId, name, value) =>
     set((s) => ({

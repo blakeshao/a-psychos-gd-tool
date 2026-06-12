@@ -52,7 +52,7 @@ function stubRegistry(cookCounts: Record<string, number>): Registry {
   return new Map(defs.map((d) => [d.type, d]));
 }
 
-const ctx: CookContext = { gpu: null, fonts: new Map() };
+const ctx: CookContext = { gpu: null, fonts: new Map(), frame: { width: 768, height: 512 } };
 
 function chainGraph(): Graph {
   // a(Const) -> b(Add) -> c(Add)
@@ -184,6 +184,36 @@ describe('Evaluator', () => {
     const explicit: Graph = { nodes: { s: { id: 's', type: 'Sized', params: { size: 64 } } }, edges: [] };
     await ev.evaluate(explicit, 's', ctx);
     expect(statuses(ev)).toEqual({ s: 'hit' });
+  });
+
+  it('re-cooks only frame-aware nodes when the frame changes', async () => {
+    const counts: Record<string, number> = {};
+    const registry = stubRegistry(counts);
+    registry.set('Framed', {
+      type: 'Framed',
+      inputs: [{ name: 'in', type: 'raster' }],
+      outputs: [{ name: 'out', type: 'raster' }],
+      params: [],
+      usesFrame: true,
+      cook: (i, _p, c) => {
+        counts.Framed = (counts.Framed ?? 0) + 1;
+        return { out: num((i.in as never as { v: number }).v + c.frame.width) };
+      },
+    });
+    const ev = new Evaluator(registry);
+    const g: Graph = {
+      nodes: {
+        a: { id: 'a', type: 'Const', params: { v: 1 } }, // frame-unaware
+        f: { id: 'f', type: 'Framed', params: {} },
+      },
+      edges: [{ from: { node: 'a', socket: 'out' }, to: { node: 'f', socket: 'in' } }],
+    };
+    const first = await ev.evaluate(g, 'f', { ...ctx, frame: { width: 100, height: 100 } });
+    expect((first.outputs.out as never as { v: number }).v).toBe(101);
+
+    const second = await ev.evaluate(g, 'f', { ...ctx, frame: { width: 200, height: 100 } });
+    expect(statuses(ev)).toEqual({ a: 'hit', f: 'miss' }); // only the frame-aware node re-cooked
+    expect((second.outputs.out as never as { v: number }).v).toBe(201);
   });
 
   it('awaits async nodes with no special casing', async () => {

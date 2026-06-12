@@ -6,7 +6,7 @@ import { ShapeNode } from '../nodes/shape';
 import type { CookContext } from './registry';
 import type { VectorValue } from './values';
 
-const ctx: CookContext = { gpu: null, fonts: new Map() };
+const ctx: CookContext = { gpu: null, fonts: new Map(), frame: { width: 768, height: 512 } };
 
 describe('flattenPaths', () => {
   it('keeps line segments and the closed flag', () => {

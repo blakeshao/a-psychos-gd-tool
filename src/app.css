@@ -38,6 +38,11 @@ body {
   background: #0d0d0d; border: 1px solid #333; color: #ddd;
   padding: 4px 6px; border-radius: 4px; font: inherit;
 }
+.param input[type='number'] {
+  flex: 1; min-width: 0;
+  background: #0d0d0d; border: 1px solid #333; color: #ddd;
+  padding: 4px 6px; border-radius: 4px; font: inherit;
+}
 .param input[type='color'] {
   flex: 1; min-width: 0; height: 24px; padding: 0;
   background: #0d0d0d; border: 1px solid #333; border-radius: 4px;

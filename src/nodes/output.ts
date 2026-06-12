@@ -12,12 +12,8 @@ export const OutputNode: NodeDef = {
   type: 'Output',
   inputs: [{ name: 'in', type: ['raster', 'elements'] }],
   outputs: [{ name: 'out', type: 'raster' }],
-  params: [
-    // artboard size — used when compositing elements; a raster input keeps its own size
-    { name: 'width', kind: 'number', default: 768, min: 16, max: 4096, step: 1 },
-    { name: 'height', kind: 'number', default: 512, min: 16, max: 4096, step: 1 },
-    { name: 'background', kind: 'color', default: '#ffffff' },
-  ],
+  params: [{ name: 'background', kind: 'color', default: '#ffffff' }],
+  usesFrame: true,
   cook(inputs, params, ctx) {
     const input = inputs.in as RasterValue | ElementsValue;
 
@@ -30,8 +26,7 @@ export const OutputNode: NodeDef = {
 
     const gpu = ctx.gpu;
     if (!gpu) throw new Error('Output needs a GPU context to composite elements');
-    const width = Math.round(Number(params.width));
-    const height = Math.round(Number(params.height));
+    const { width, height } = ctx.frame;
     const [r, g, b] = hexToRgb(String(params.background));
     const texture = renderElements(gpu, ctx.fonts, asElements(input), width, height, { r, g, b, a: 1 });
     return { out: { kind: 'raster', texture, width, height } satisfies RasterValue };

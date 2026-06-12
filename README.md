@@ -10,6 +10,10 @@ A node-based graphic design tool. Types flow on typed wires — `text => vector 
 
 Union input sockets (white handles) accept several types — e.g. `Output.in: raster | elements`, `Place.elements: elements | vector | raster | text` — matching the spec's `To Alpha (raster | element => alpha)` pattern.
 
+### The frame
+
+The document has one **frame** (artboard size), edited in the sidebar and stored in the graph. Every frame-aware operator — Rasterize, Noise, Output — cooks at frame resolution via `ctx.frame`; nodes declare `usesFrame` so the evaluator folds the frame into their content hash. Changing the frame re-cooks exactly the frame-aware nodes and their descendants; text shaping and vector geometry stay cached. No per-node resolution params.
+
 ## Run
 
 ```sh
