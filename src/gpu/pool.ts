@@ -30,6 +30,9 @@ export class TexturePool {
   constructor(private device: TextureFactory) {}
 
   acquire(width: number, height: number, format: GPUTextureFormat = 'rgba8unorm'): PooledTexture {
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+      throw new Error(`invalid texture size ${width}x${height} — a node cooked with bad dimensions`);
+    }
     const key = `${width}x${height}:${format}`;
     const list = this.free.get(key);
     const recycled = list?.pop();

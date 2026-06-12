@@ -5,10 +5,21 @@
 // changing one param re-cooks only that node and its descendants — everything
 // else is a HIT. Async nodes need no special casing: cook() is awaited.
 
-import type { Edge, Graph, NodeId } from './graph';
+import type { Edge, Graph, NodeId, ParamValue } from './graph';
 import { hashNode } from './hash';
-import type { CookContext, Registry } from './registry';
+import type { CookContext, NodeDef, Registry } from './registry';
 import type { OutputValues, Value } from './values';
+
+/**
+ * Node instances may predate params added to their def later (old documents,
+ * hand-built graphs). Cook — and hash — with the def's defaults filled in,
+ * so a missing param behaves exactly like one set to its default.
+ */
+function paramsWithDefaults(def: NodeDef, params: Record<string, ParamValue>): Record<string, ParamValue> {
+  const merged: Record<string, ParamValue> = {};
+  for (const spec of def.params) merged[spec.name] = spec.default;
+  return { ...merged, ...params };
+}
 
 export interface CookEvent {
   nodeId: NodeId;
@@ -97,7 +108,8 @@ export class Evaluator {
       }
 
       // 3. content hash → cache lookup
-      const hash = hashNode(node.type, node.params, inputHashes);
+      const params = paramsWithDefaults(def, node.params);
+      const hash = hashNode(node.type, params, inputHashes);
       this.latestHash.set(nodeId, hash);
       const cached = this.entries.get(hash);
       if (cached) {
@@ -107,7 +119,7 @@ export class Evaluator {
 
       // 4. miss: run the actual work (await covers async/model nodes too)
       const t0 = performance.now();
-      const outputs = await def.cook(inputs, node.params, ctx);
+      const outputs = await def.cook(inputs, params, ctx);
       this.entries.set(hash, { nodeId, outputs });
       this.events.push({ nodeId, type: node.type, status: 'miss', ms: performance.now() - t0 });
       return { outputs, hash };

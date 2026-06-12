@@ -13,7 +13,7 @@ const initialGraph: Graph = {
     outline1: { id: 'outline1', type: 'Outline', params: {}, position: { x: 230, y: 80 } },
     raster1: { id: 'raster1', type: 'Rasterize', params: { width: 768, height: 512 }, position: { x: 420, y: 80 } },
     blur1: { id: 'blur1', type: 'Blur', params: { radius: 8 }, position: { x: 620, y: 80 } },
-    out: { id: 'out', type: 'Output', params: {}, position: { x: 800, y: 80 } },
+    out: { id: 'out', type: 'Output', params: { width: 768, height: 512, background: '#ffffff' }, position: { x: 800, y: 80 } },
   },
   edges: [
     { from: { node: 'text1', socket: 'out' }, to: { node: 'outline1', socket: 'text' } },

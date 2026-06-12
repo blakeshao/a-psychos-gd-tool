@@ -161,6 +161,31 @@ describe('Evaluator', () => {
     await expect(ev.evaluate(g, 'o', ctx)).rejects.toThrow(/input "in" is not connected/);
   });
 
+  it('fills missing params with registry defaults, hashing them identically', async () => {
+    const counts: Record<string, number> = {};
+    const registry = stubRegistry(counts);
+    registry.set('Sized', {
+      type: 'Sized',
+      inputs: [],
+      outputs: [{ name: 'out', type: 'raster' }],
+      params: [{ name: 'size', kind: 'number', default: 64 }],
+      cook: (_i, p) => {
+        if (typeof p.size !== 'number' || Number.isNaN(p.size)) throw new Error('size missing');
+        return { out: num(Number(p.size)) };
+      },
+    });
+    const ev = new Evaluator(registry);
+    // instance predates the param — params is empty (the createTexture NaN bug)
+    const bare: Graph = { nodes: { s: { id: 's', type: 'Sized', params: {} } }, edges: [] };
+    const first = await ev.evaluate(bare, 's', ctx);
+    expect((first.outputs.out as never as { v: number }).v).toBe(64); // cooked with the default
+
+    // an instance with the default written out is the SAME content → cache hit
+    const explicit: Graph = { nodes: { s: { id: 's', type: 'Sized', params: { size: 64 } } }, edges: [] };
+    await ev.evaluate(explicit, 's', ctx);
+    expect(statuses(ev)).toEqual({ s: 'hit' });
+  });
+
   it('awaits async nodes with no special casing', async () => {
     const ev = new Evaluator(stubRegistry({}));
     const g: Graph = {
