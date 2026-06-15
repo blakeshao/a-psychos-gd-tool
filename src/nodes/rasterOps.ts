@@ -49,6 +49,7 @@ export const RecolorNode: NodeDef = {
 
 export const ChromaKeyNode: NodeDef = {
   type: 'ChromaKey',
+  label: 'Chroma Key',
   inputs: [{ name: 'in', type: 'raster' }],
   outputs: [{ name: 'out', type: 'raster' }],
   params: [
@@ -85,6 +86,7 @@ export const AsciiNode: NodeDef = {
 
 export const ToAlphaNode: NodeDef = {
   type: 'ToAlpha',
+  label: 'To Alpha',
   inputs: [{ name: 'in', type: 'raster' }],
   outputs: [{ name: 'out', type: 'alpha' }],
   params: [

@@ -16,11 +16,23 @@ import {
 import '@xyflow/react/dist/style.css';
 import { edgeKey } from '../engine/graph';
 import { socketTypes } from '../engine/registry';
-import { registry } from '../nodes';
+import { PALETTE, registry } from '../nodes';
 import { useApp, wireIsValid } from '../store';
-import { GfxNode, SOCKET_COLORS } from './GfxNode';
+import { GfxNode } from './GfxNode';
+import type { SocketType } from '../engine/values';
 
 const nodeTypes = { gfx: GfxNode };
+
+// Wire colors — a bright 2000s palette, one unique hue per type, matching the
+// socket circle colors in GfxNode.
+const WIRE_COLORS: Record<SocketType, string> = {
+  text: '#7fff00', // chartreuse
+  vector: '#00a99d', // teal
+  raster: '#1493ff', // azure
+  alpha: '#8a2be2', // blue violet
+  elements: '#9aa0a6', // grey
+  layout: '#ff1493', // hot pink
+};
 
 export function NodeEditor() {
   const graph = useApp((s) => s.graph);
@@ -50,7 +62,7 @@ export function NodeEditor() {
           sourceHandle: e.from.socket,
           target: e.to.node,
           targetHandle: e.to.socket,
-          style: socketType ? { stroke: SOCKET_COLORS[socketType], strokeWidth: 1.5 } : undefined,
+          style: socketType ? { stroke: WIRE_COLORS[socketType], strokeWidth: 1.5 } : undefined,
         };
       }),
     [graph],
@@ -111,14 +123,25 @@ export function NodeEditor() {
       onConnect={onConnect}
       isValidConnection={isValidConnection}
       deleteKeyCode={['Backspace', 'Delete']}
+      minZoom={0.1}
       fitView
       proOptions={{ hideAttribution: true }}
-      colorMode="dark"
+      colorMode="light"
     >
       <Background gap={16} size={1} />
       <Panel position="top-left" className="palette">
-        {[...registry.keys()].map((type) => (
-          <button key={type} onClick={() => addNode(type)}>+ {type}</button>
+        <h1 className="editor-title">nodegfx</h1>
+        {PALETTE.map(({ category, nodes }) => (
+          <details key={category} className="palette-group">
+            <summary className="palette-heading">{category}</summary>
+            <div className="palette-buttons">
+              {nodes.map((def) => (
+                <button key={def.type} onClick={() => addNode(def.type)}>
+                  + {def.label ?? def.type}
+                </button>
+              ))}
+            </div>
+          </details>
         ))}
       </Panel>
     </ReactFlow>

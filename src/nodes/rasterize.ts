@@ -1,6 +1,7 @@
 // Rasterize (vector => raster) — the CPU→GPU boundary crossing. Pixels are
 // produced at the document's frame size, so the whole raster lane shares
-// one resolution.
+// one resolution. Output is ink on a transparent ground: paper (background)
+// is laid down only at Output, so rasters stay composable as elements.
 //
 // Scaffold note: paths are drawn via OffscreenCanvas 2D (the browser is the
 // tessellator) and uploaded once. Real GPU tessellation can replace the body
@@ -23,8 +24,6 @@ export const RasterizeNode: NodeDef = {
 
     const canvas = new OffscreenCanvas(width, height);
     const c2d = canvas.getContext('2d')!;
-    c2d.fillStyle = '#ffffff';
-    c2d.fillRect(0, 0, width, height);
 
     // center the geometry on the artboard
     const b = vector.bounds;

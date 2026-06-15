@@ -22,7 +22,7 @@ export interface Frame {
   height: number;
 }
 
-export const DEFAULT_FRAME: Frame = { width: 768, height: 512 };
+export const DEFAULT_FRAME: Frame = { width: 2304, height: 3456 };
 
 export interface Graph {
   nodes: Record<NodeId, NodeInstance>;

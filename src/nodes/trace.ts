@@ -22,6 +22,15 @@ export const TraceNode: NodeDef = {
     const src = inputs.in as RasterValue;
 
     const imageData = await gpu.readback(src.texture);
+    // rasters are ink on a transparent ground — trace them as if on white paper
+    const px = imageData.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3] / 255;
+      px[i] = Math.round(255 * (1 - a) + px[i] * a);
+      px[i + 1] = Math.round(255 * (1 - a) + px[i + 1] * a);
+      px[i + 2] = Math.round(255 * (1 - a) + px[i + 2] * a);
+      px[i + 3] = 255;
+    }
     const traced = ImageTracer.imagedataToTracedata(imageData, {
       ltres: Number(params.smoothness),
       qtres: Number(params.smoothness),

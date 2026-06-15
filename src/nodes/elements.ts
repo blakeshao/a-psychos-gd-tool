@@ -9,6 +9,7 @@ import type {
   ElementsValue,
   LayoutValue,
   PathCmd,
+  Placement,
   TextValue,
   Value,
   VectorValue,
@@ -135,19 +136,21 @@ export const PlaceNode: NodeDef = {
       return { out: { kind: 'elements', items: [] } satisfies ElementsValue };
     }
 
-    const pick = (i: number): Element => {
+    // The element lane decides how many: one output item per element. The
+    // layout only supplies positions — extra placements (e.g. unused grid
+    // cells) stay empty; if elements outnumber placements they wrap.
+    const slotFor = (e: Element, i: number): Placement => {
       if (params.distribute === 'by-index') {
-        const p = layout[i];
-        return elements.find((e) => e.index === p.index) ?? elements[i % elements.length];
+        return layout.find((p) => p.index === e.index) ?? layout[i % layout.length];
       }
       if (params.distribute === 'shuffle') {
-        return elements[Math.floor(latticeHash(i, 31, seed) * elements.length)];
+        return layout[Math.floor(latticeHash(i, 31, seed) * layout.length)];
       }
-      return elements[i % elements.length];
+      return layout[i % layout.length];
     };
 
-    const items: Element[] = layout.map((p, i) => {
-      const e = pick(i);
+    const items: Element[] = elements.map((e, i) => {
+      const p = slotFor(e, i);
       let scale = e.transform.scale * p.scale;
       let rotation = e.transform.rotation + p.rotation;
       if (params.bindWeight === 'scale') scale *= 1 - amount * (1 - p.weight);
@@ -156,7 +159,7 @@ export const PlaceNode: NodeDef = {
         content: e.content,
         // the placement replaces the element's position; rotation/scale compose
         transform: { x: p.x, y: p.y, rotation, scale },
-        index: p.index,
+        index: e.index,
         weight: p.weight,
       };
     });

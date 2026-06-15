@@ -21,7 +21,8 @@ export type ParamSpec =
   | { name: string; kind: 'string'; default: string }
   | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number }
   | { name: string; kind: 'color'; default: string } // '#rrggbb'
-  | { name: string; kind: 'select'; options: string[]; default: string };
+  | { name: string; kind: 'select'; options: string[]; default: string }
+  | { name: string; kind: 'image'; default: string }; // a data: URI — travels with the doc
 
 export interface CookContext {
   /** null in headless tests — CPU nodes must not touch it */
@@ -32,7 +33,10 @@ export interface CookContext {
 }
 
 export interface NodeDef {
+  /** stable serialized identity — never change once documents reference it */
   type: string;
+  /** palette/title display name; falls back to `type` when omitted */
+  label?: string;
   inputs: SocketSpec[];
   outputs: SocketSpec[];
   params: ParamSpec[];

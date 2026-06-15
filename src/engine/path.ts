@@ -125,12 +125,18 @@ export function transformPaths(paths: PathCmd[][], t: Transform2D): PathCmd[][] 
 }
 
 /**
- * Sample `count` evenly-spaced points (by arc length) along flattened paths,
- * with the tangent angle at each point. Spans subpaths as one run.
+ * Sample points (with tangent angle) along flattened paths, spanning subpaths
+ * as one run. `gap` is the arc-length spacing between samples; the count of
+ * points follows from how many fit in the path's length. The run is centered
+ * along the path (like Grid/Function center their output), so changing `gap`
+ * moves every sample — none is pinned to the path's start. `offset` then slides
+ * the whole run along the arc. Distances wrap around the run, so offset rotates
+ * the pattern; a gap that doesn't divide the length evenly drops the remainder.
  */
 export function samplePathEvenly(
   polys: Polyline[],
-  count: number,
+  gap: number,
+  offset = 0,
 ): { x: number; y: number; rotation: number; t: number }[] {
   type Seg = { ax: number; ay: number; bx: number; by: number; len: number };
   const segs: Seg[] = [];
@@ -142,14 +148,15 @@ export function samplePathEvenly(
     }
   }
   const total = segs.reduce((sum, s) => sum + s.len, 0);
-  if (total === 0 || segs.length === 0) return [];
+  if (total === 0 || segs.length === 0 || gap <= 0) return [];
 
+  const count = Math.max(1, Math.floor(total / gap)); // spacing drives how many fit
+  const mid = (count - 1) / 2; // center the run so no sample is pinned to the start
   const out: { x: number; y: number; rotation: number; t: number }[] = [];
-  let segIdx = 0;
-  let walked = 0;
   for (let i = 0; i < count; i++) {
-    const t = count === 1 ? 0 : i / count; // closed-feel spacing: no doubled endpoint
-    const target = t * total;
+    const dist = offset + (i - mid) * gap;
+    const target = ((dist % total) + total) % total; // wrap into [0, total)
+    let segIdx = 0, walked = 0;
     while (segIdx < segs.length - 1 && walked + segs[segIdx].len < target) {
       walked += segs[segIdx].len;
       segIdx++;
@@ -160,7 +167,7 @@ export function samplePathEvenly(
       x: seg.ax + (seg.bx - seg.ax) * local,
       y: seg.ay + (seg.by - seg.ay) * local,
       rotation: Math.atan2(seg.by - seg.ay, seg.bx - seg.ax),
-      t,
+      t: target / total,
     });
   }
   return out;

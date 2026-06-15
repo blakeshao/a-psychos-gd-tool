@@ -15,7 +15,7 @@ import type {
 } from '../engine/values';
 import { TextNode } from './text';
 import { ShapeNode } from './shape';
-import { FlattenNode, PlaceNode, SplitNode } from './elements';
+import { DuplicatorNode, FlattenNode, PlaceNode, SplitNode } from './elements';
 import { GridNode, SamplePathNode, FilterLayoutNode, SortLayoutNode } from './layout';
 
 let ctx: CookContext;
@@ -59,7 +59,7 @@ describe('Split', () => {
 });
 
 describe('Place', () => {
-  it('cycles elements over placements and binds weight to scale', async () => {
+  it('emits one item per element, filling placements in order and binding weight', async () => {
     const text = await shape('AB');
     const elements = (await SplitNode.cook({ text }, { by: 'characters' }, ctx)).out as ElementsValue;
     const layout = (await GridNode.cook({}, { columns: 4, rows: 1, spacingX: 50, spacingY: 50 }, ctx))
@@ -73,34 +73,26 @@ describe('Place', () => {
       ctx,
     );
     const items = (placed.out as ElementsValue).items;
-    expect(items).toHaveLength(4);
-    expect(items.map((e) => (e.content as TextValue).content)).toEqual(['A', 'B', 'A', 'B']);
+    // two elements, four cells: count follows the elements, not the layout
+    expect(items).toHaveLength(2);
+    expect(items.map((e) => (e.content as TextValue).content)).toEqual(['A', 'B']);
     const scales = items.map((e) => e.transform.scale);
-    [0, 1 / 3, 2 / 3, 1].forEach((want, i) => expect(scales[i]).toBeCloseTo(want, 10)); // scale = weight at amount 1
+    [0, 1 / 3].forEach((want, i) => expect(scales[i]).toBeCloseTo(want, 10)); // scale = weight at amount 1
     expect(items[0].transform.x).toBe(layout.placements[0].x); // placement replaces position
   });
 });
 
 describe('SamplePath -> Place -> Flatten round trip', () => {
-  it('spaces glyphs evenly along an ellipse with tangent rotation', async () => {
+  it('gap subdivides the ring; Place fills one slot per glyph, with tangent rotation', async () => {
     const text = await shape('PSYCHO');
     const elements = (await SplitNode.cook({ text }, { by: 'characters' }, ctx)).out as ElementsValue;
     const ellipse = (await ShapeNode.cook({}, { kind: 'ellipse', width: 400, height: 400, sides: 6 }, ctx))
       .out as VectorValue;
-    const layout = (await SamplePathNode.cook({ path: ellipse }, { count: 6, tangent: 'rotate' }, ctx))
+    const layout = (await SamplePathNode.cook({ path: ellipse }, { gap: 120, offset: 0, tangent: 'rotate' }, ctx))
       .out as LayoutValue;
 
-    expect(layout.placements).toHaveLength(6);
-    // even arc-length spacing on a circle of r=200: chord for 60° ≈ 200
-    const d01 = Math.hypot(
-      layout.placements[1].x - layout.placements[0].x,
-      layout.placements[1].y - layout.placements[0].y,
-    );
-    const d12 = Math.hypot(
-      layout.placements[2].x - layout.placements[1].x,
-      layout.placements[2].y - layout.placements[1].y,
-    );
-    expect(Math.abs(d01 - d12) / d01).toBeLessThan(0.05);
+    // gap drives the slot count: ~circumference / 120, more than the 6 glyphs
+    expect(layout.placements.length).toBeGreaterThan(6);
     // tangent rotations actually rotate around the ring
     const rotations = layout.placements.map((p) => p.rotation);
     expect(new Set(rotations.map((r) => r.toFixed(2))).size).toBeGreaterThan(4);
@@ -110,16 +102,21 @@ describe('SamplePath -> Place -> Flatten round trip', () => {
       { distribute: 'cycle', bindWeight: 'none', bindAmount: 1, seed: 0 },
       ctx,
     );
+    // element-driven: 6 glyphs → 6 placed items, each on a distinct slot
+    const items = (placed.out as ElementsValue).items;
+    expect(items).toHaveLength(6);
+    expect(new Set(items.map((e) => `${e.transform.x},${e.transform.y}`)).size).toBe(6);
+
     const flat = await FlattenNode.cook({ in: placed.out }, {}, ctx);
     const v = flat.out as VectorValue;
     expect(v.paths.length).toBeGreaterThanOrEqual(6); // every glyph contributed geometry
-    expect(v.bounds.width).toBeGreaterThan(300); // spread around the ring, not stacked
-    expect(v.bounds.height).toBeGreaterThan(300);
+    expect(v.bounds.width).toBeGreaterThan(100); // spread along the ring, not stacked
+    expect(v.bounds.height).toBeGreaterThan(100);
   });
 });
 
 describe('singular/plural lift', () => {
-  it('a lone vector placed onto a grid cycles onto every placement', async () => {
+  it('a lone vector lifts to one element and places onto the first cell only', async () => {
     const hex = (await ShapeNode.cook({}, { kind: 'polygon', width: 40, height: 40, sides: 6 }, ctx))
       .out as VectorValue;
     const layout = (await GridNode.cook({}, { columns: 3, rows: 2, spacingX: 60, spacingY: 60 }, ctx))
@@ -130,8 +127,10 @@ describe('singular/plural lift', () => {
       ctx,
     );
     const items = (placed.out as ElementsValue).items;
-    expect(items).toHaveLength(6);
-    expect(items.every((e) => e.content === hex)).toBe(true); // shared content, six transforms
+    // one element → one item; the other five grid cells stay empty (Duplicate to fill them)
+    expect(items).toHaveLength(1);
+    expect(items[0].content).toBe(hex);
+    expect(items[0].transform.x).toBe(layout.placements[0].x);
   });
 
   it('Duplicator lifts raster-like content and repeats elements', async () => {
@@ -145,6 +144,32 @@ describe('singular/plural lift', () => {
     expect(items).toHaveLength(4);
     expect(items.map((e) => e.index)).toEqual([0, 1, 2, 3]);
     expect(items.every((e) => e.content === fakeRaster)).toBe(true);
+  });
+});
+
+describe('Duplicator decides how many items land in a layout', () => {
+  it('7 duplicates fill the first 7 cells of a 6×4 grid; the rest stay empty', async () => {
+    const hex = (await ShapeNode.cook({}, { kind: 'polygon', width: 40, height: 40, sides: 6 }, ctx))
+      .out as VectorValue;
+    const dup = (await DuplicatorNode.cook({ in: hex }, { count: 7 }, ctx)).out as ElementsValue;
+    expect(dup.items).toHaveLength(7);
+
+    // Grid keeps its own 6×4 = 24 cells, independent of the count
+    const grid = (await GridNode.cook({}, { columns: 6, rows: 4, spacingX: 100, spacingY: 100 }, ctx))
+      .out as LayoutValue;
+    expect(grid.placements).toHaveLength(24);
+
+    const placed = (await PlaceNode.cook(
+      { elements: dup, layout: grid },
+      { distribute: 'cycle', bindWeight: 'none', bindAmount: 1, seed: 0 },
+      ctx,
+    )).out as ElementsValue;
+    // output count follows the Duplicator, not the grid; items sit in cells 0..6
+    expect(placed.items).toHaveLength(7);
+    placed.items.forEach((item, i) => {
+      expect(item.transform.x).toBe(grid.placements[i].x);
+      expect(item.transform.y).toBe(grid.placements[i].y);
+    });
   });
 });
 

@@ -3,6 +3,8 @@
 // evaluator only ever reads it.
 
 import { create } from 'zustand';
+import * as opentype from 'opentype.js';
+import type { Font } from 'opentype.js';
 import {
   DEFAULT_FRAME,
   edgeKey,
@@ -15,14 +17,36 @@ import {
 import { canConnect } from './engine/registry';
 import { registry } from './nodes';
 
+// Local Font Access API (Chromium) — not in the default TS lib.
+interface FontData {
+  family: string;
+  fullName: string;
+  postscriptName: string;
+  style: string;
+  blob(): Promise<Blob>;
+}
+declare global {
+  interface Window {
+    queryLocalFonts?: () => Promise<FontData[]>;
+  }
+}
+
+// raw queryable font files, keyed by family — kept out of reactive state since
+// FontData isn't serializable and is only needed to parse a font on demand
+let localFontData = new Map<string, FontData>();
+export function getLocalFontData(family: string): FontData | undefined {
+  return localFontData.get(family);
+}
+export const localFontsSupported = typeof window !== 'undefined' && 'queryLocalFonts' in window;
+
 const initialGraph: Graph = {
   frame: { ...DEFAULT_FRAME },
   nodes: {
-    text1: { id: 'text1', type: 'Text', params: { content: 'PSYCHO', fontSize: 160, font: 'default' }, position: { x: 30, y: 80 } },
-    outline1: { id: 'outline1', type: 'Outline', params: {}, position: { x: 230, y: 80 } },
-    raster1: { id: 'raster1', type: 'Rasterize', params: {}, position: { x: 420, y: 80 } },
-    blur1: { id: 'blur1', type: 'Blur', params: { radius: 8 }, position: { x: 620, y: 80 } },
-    out: { id: 'out', type: 'Output', params: { background: '#ffffff' }, position: { x: 800, y: 80 } },
+    text1: { id: 'text1', type: 'Text', params: { content: 'PSYCHO', fontSize: 160, font: 'default' }, position: { x: 40, y: 80 } },
+    outline1: { id: 'outline1', type: 'Outline', params: {}, position: { x: 240, y: 80 } },
+    raster1: { id: 'raster1', type: 'Rasterize', params: {}, position: { x: 440, y: 80 } },
+    blur1: { id: 'blur1', type: 'Blur', params: { radius: 8 }, position: { x: 640, y: 80 } },
+    out: { id: 'out', type: 'Output', params: { background: '#ffffff' }, position: { x: 840, y: 80 } },
   },
   edges: [
     { from: { node: 'text1', socket: 'out' }, to: { node: 'outline1', socket: 'text' } },
@@ -54,6 +78,10 @@ export function wireIsValid(graph: Graph, w: WireSpec): boolean {
 interface AppStore {
   graph: Graph;
   selectedNodeId: NodeId | null;
+  /** parsed fonts ready to cook, keyed by font key ('default' + local families) */
+  fonts: Record<string, Font>;
+  /** family names of the user's local fonts, available to load on demand */
+  localFonts: string[];
   select: (id: NodeId | null) => void;
   setFrame: (frame: Frame) => void;
   setParam: (nodeId: NodeId, name: string, value: ParamValue) => void;
@@ -62,13 +90,20 @@ interface AppStore {
   removeNodes: (ids: NodeId[]) => void;
   connect: (w: WireSpec) => void;
   removeEdges: (edgeKeys: string[]) => void;
+  addFont: (key: string, font: Font) => void;
+  /** parse a queryable local font (by family) into the cookable fonts map */
+  loadLocalFont: (family: string) => Promise<void>;
+  /** prompt for local font access and list the available families */
+  loadLocalFonts: () => Promise<void>;
 }
 
 let nextId = 1;
 
-export const useApp = create<AppStore>((set) => ({
+export const useApp = create<AppStore>((set, get) => ({
   graph: initialGraph,
   selectedNodeId: null,
+  fonts: {},
+  localFonts: [],
 
   select: (id) => set({ selectedNodeId: id }),
 
@@ -118,7 +153,7 @@ export const useApp = create<AppStore>((set) => ({
       const nodes = Object.fromEntries(Object.entries(s.graph.nodes).filter(([id]) => !drop.has(id)));
       const edges = s.graph.edges.filter((e) => !drop.has(e.from.node) && !drop.has(e.to.node));
       return {
-        graph: { nodes, edges },
+        graph: { ...s.graph, nodes, edges },
         selectedNodeId: s.selectedNodeId && drop.has(s.selectedNodeId) ? null : s.selectedNodeId,
       };
     }),
@@ -142,6 +177,25 @@ export const useApp = create<AppStore>((set) => ({
       const drop = new Set(keys);
       return { graph: { ...s.graph, edges: s.graph.edges.filter((e) => !drop.has(edgeKey(e))) } };
     }),
+
+  addFont: (key, font) => set((s) => ({ fonts: { ...s.fonts, [key]: font } })),
+
+  loadLocalFont: async (family) => {
+    if (get().fonts[family]) return;
+    const fd = localFontData.get(family);
+    if (!fd) return;
+    const font = opentype.parse(await (await fd.blob()).arrayBuffer());
+    set((s) => ({ fonts: { ...s.fonts, [family]: font } }));
+  },
+
+  loadLocalFonts: async () => {
+    if (!window.queryLocalFonts) return;
+    const data = await window.queryLocalFonts();
+    const map = new Map<string, FontData>();
+    for (const fd of data) if (!map.has(fd.family)) map.set(fd.family, fd);
+    localFontData = map;
+    set({ localFonts: [...map.keys()].sort((a, b) => a.localeCompare(b)) });
+  },
 }));
 
 // dev/verify handle — scripts/verify.mjs builds graphs through this

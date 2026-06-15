@@ -1,5 +1,6 @@
-// Output — the artboard / cook root. Accepts a finished raster (passthrough)
-// OR elements, which it composites natively in z-order at artboard resolution.
+// Output — the artboard / cook root. Accepts a raster or elements and
+// composites them over the background at artboard resolution — paper is laid
+// down here, never upstream, so ink rasters keep their alpha until the end.
 // Requesting it forces the graph to cook; export & color space land here later.
 
 import type { NodeDef } from '../engine/registry';
@@ -16,18 +17,11 @@ export const OutputNode: NodeDef = {
   usesFrame: true,
   cook(inputs, params, ctx) {
     const input = inputs.in as RasterValue | ElementsValue;
-
-    if (input.kind === 'raster') {
-      // passthrough shares the upstream texture, so this cache entry takes its
-      // own ref — each entry owns exactly one ref to each texture it holds
-      ctx.gpu?.pool.retain(input.texture);
-      return { out: { ...input } satisfies RasterValue };
-    }
-
     const gpu = ctx.gpu;
-    if (!gpu) throw new Error('Output needs a GPU context to composite elements');
+    if (!gpu) throw new Error('Output needs a GPU context to composite');
     const { width, height } = ctx.frame;
     const [r, g, b] = hexToRgb(String(params.background));
+    // a raster lifts to a single centered element — same compositing path
     const texture = renderElements(gpu, ctx.fonts, asElements(input), width, height, { r, g, b, a: 1 });
     return { out: { kind: 'raster', texture, width, height } satisfies RasterValue };
   },

@@ -1,20 +1,30 @@
-// Shell: node editor (bottom), viewport presenting the Output node's raster
-// (top), and a sidebar with the selected node's inspector + the cook log.
-// Any document edit schedules a cook on the next animation frame.
+// Shell: node editor (left) and the poster viewport presenting the Output
+// node's raster (right). A top bar holds the frame config and a collapsible
+// cook log. Node parameters are edited inline on each node. Any document edit
+// schedules a cook on the next animation frame.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as opentype from 'opentype.js';
 import type { Font } from 'opentype.js';
-import { DEFAULT_FRAME, type Graph, type NodeId, type ParamValue } from './engine/graph';
+import { DEFAULT_FRAME, type Graph, type NodeId } from './engine/graph';
 import { Evaluator, type CookEvent } from './engine/evaluator';
-import type { CookContext, ParamSpec } from './engine/registry';
-import type { RasterValue } from './engine/values';
+import { socketTypes, type CookContext } from './engine/registry';
+import type { Placement, RasterValue } from './engine/values';
 import { GpuContext } from './gpu/device';
 import { registry } from './nodes';
 import { NodeEditor } from './editor/NodeEditor';
 import { useApp } from './store';
 
 const FONT_URLS = ['/fonts/Inter-Regular.otf', '/fonts/JetBrainsMono-Regular.ttf', '/fonts/local-fallback.ttf'];
+
+const FRAME_PRESETS: { label: string; width: number; height: number }[] = [
+  { label: 'Phone — 2304×3456', width: 2304, height: 3456 },
+  { label: 'Square — 2048×2048', width: 2048, height: 2048 },
+  { label: 'HD — 1920×1080', width: 1920, height: 1080 },
+  { label: '4K — 3840×2160', width: 3840, height: 2160 },
+  { label: 'A4 300dpi — 2480×3508', width: 2480, height: 3508 },
+  { label: 'Portrait — 1080×1350', width: 1080, height: 1350 },
+];
 
 async function loadFirstFont(): Promise<Font | null> {
   for (const url of FONT_URLS) {
@@ -38,16 +48,18 @@ type Status = 'booting' | 'ready' | 'no-webgpu' | 'no-font';
 export default function App() {
   const graph = useApp((s) => s.graph);
   const selectedNodeId = useApp((s) => s.selectedNodeId);
-  const setParam = useApp((s) => s.setParam);
+  const fonts = useApp((s) => s.fonts);
   const setFrame = useApp((s) => s.setFrame);
 
   const [status, setStatus] = useState<Status>('booting');
   const [events, setEvents] = useState<CookEvent[]>([]);
   const [poolStats, setPoolStats] = useState({ allocated: 0, free: 0, live: 0 });
   const [cookError, setCookError] = useState<string | null>(null);
+  const [guide, setGuide] = useState<Placement[] | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const ctxRef = useRef<Omit<CookContext, 'frame'> | null>(null);
+  const guideRef = useRef<HTMLCanvasElement>(null);
+  const gpuRef = useRef<GpuContext | null>(null);
   const evaluatorRef = useRef(new Evaluator(registry));
   const busyRef = useRef(false);
   const queuedRef = useRef<Graph | null>(null);
@@ -61,20 +73,24 @@ export default function App() {
       const font = await loadFirstFont();
       if (cancelled) return;
       if (!font) { setStatus('no-font'); return; }
-      ctxRef.current = { gpu, fonts: new Map([['default', font]]) };
+      gpuRef.current = gpu;
+      useApp.getState().addFont('default', font);
       setStatus('ready');
     })();
     return () => { cancelled = true; };
   }, []);
 
   const runCook = useCallback(async (g: Graph) => {
-    const base = ctxRef.current;
+    const gpu = gpuRef.current;
     const canvas = canvasRef.current;
-    if (!base?.gpu || !canvas) return;
-    const gpu = base.gpu;
+    if (!gpu || !canvas) return;
     if (busyRef.current) { queuedRef.current = g; return; }
     busyRef.current = true;
-    const ctx: CookContext = { ...base, frame: g.frame ?? DEFAULT_FRAME };
+    const ctx: CookContext = {
+      gpu,
+      fonts: new Map(Object.entries(useApp.getState().fonts)),
+      frame: g.frame ?? DEFAULT_FRAME,
+    };
     try {
       const outputId = findOutputNode(g);
       if (!outputId) { setCookError('add an Output node to cook the graph'); return; }
@@ -100,61 +116,159 @@ export default function App() {
     if (status !== 'ready') return;
     const id = requestAnimationFrame(() => runCook(graph));
     return () => cancelAnimationFrame(id);
-  }, [graph, status, runCook]);
+  }, [graph, status, runCook, fonts]);
+
+  // Parse any local font a Text node references but that isn't loaded yet;
+  // addFont then bumps `fonts`, which re-cooks via the effect above.
+  useEffect(() => {
+    const { fonts: loaded, loadLocalFont } = useApp.getState();
+    for (const node of Object.values(graph.nodes)) {
+      if (node.type !== 'Text') continue;
+      const key = String(node.params.font ?? 'default');
+      if (key !== 'default' && !loaded[key]) loadLocalFont(key);
+    }
+  }, [graph, fonts]);
+
+  // Selecting a node that produces a layout shows its placements as a guide
+  // over the artboard. Cooked with a throwaway CPU-only evaluator so the main
+  // cook cache is untouched; chains that need the GPU just skip the guide.
+  useEffect(() => {
+    const node = selectedNodeId ? graph.nodes[selectedNodeId] : null;
+    const def = node ? registry.get(node.type) : null;
+    const layoutSocket = def?.outputs.find((s) => socketTypes(s).includes('layout'));
+    if (status !== 'ready' || !node || !layoutSocket) {
+      setGuide(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const ctx: CookContext = {
+          gpu: null,
+          fonts: new Map(Object.entries(useApp.getState().fonts)),
+          frame: graph.frame ?? DEFAULT_FRAME,
+        };
+        const result = await new Evaluator(registry).evaluate(graph, node.id, ctx);
+        const value = result.outputs[layoutSocket.name];
+        if (!cancelled) setGuide(value?.kind === 'layout' ? value.placements : null);
+      } catch {
+        if (!cancelled) setGuide(null); // half-wired or GPU-dependent chain — no guide
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [graph, selectedNodeId, status]);
+
+  // draw the guide markers: position circle + rotation tick, artboard-centered
+  useEffect(() => {
+    const canvas = guideRef.current;
+    if (!canvas || !guide) return;
+    const { width, height } = graph.frame ?? DEFAULT_FRAME;
+    canvas.width = width;
+    canvas.height = height;
+    const c = canvas.getContext('2d')!;
+    c.clearRect(0, 0, width, height);
+    c.strokeStyle = '#ff1493'; // layout socket color
+    c.fillStyle = '#ff1493';
+    c.lineWidth = Math.max(1, width / 512);
+    for (const p of guide) {
+      const x = width / 2 + p.x;
+      const y = height / 2 + p.y;
+      const r = 7 * p.scale;
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(x, y);
+      c.lineTo(x + Math.cos(p.rotation) * r * 2, y + Math.sin(p.rotation) * r * 2);
+      c.stroke();
+      c.beginPath();
+      c.arc(x, y, c.lineWidth, 0, Math.PI * 2);
+      c.fill();
+    }
+  }, [guide, graph.frame]);
 
   if (status === 'no-webgpu') return <div className="boot-msg">WebGPU is not available in this browser. Try Chrome/Edge 113+, or Safari 18+.</div>;
   if (status === 'no-font') return <div className="boot-msg">No font found — run <code>scripts/get-font.sh</code> to fetch one into <code>public/fonts/</code>.</div>;
 
-  const selected = selectedNodeId ? graph.nodes[selectedNodeId] : null;
-  const selectedDef = selected ? registry.get(selected.type) : null;
+  const frame = graph.frame ?? DEFAULT_FRAME;
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <h1>nodegfx <span className="phase">phase 2</span></h1>
-        <section className="node-panel frame-config">
-          <h2>frame</h2>
-          <label className="param">
-            <span>width</span>
+      <div className="editor">
+        <NodeEditor />
+      </div>
+      <div className="viewport">
+        <div className="frame-config">
+          <div className="preset-icons">
+            {FRAME_PRESETS.map((p) => {
+              const ar = p.width / p.height;
+              const w = ar >= 1 ? 22 : Math.round(22 * ar);
+              const h = ar >= 1 ? Math.round(22 / ar) : 22;
+              return { ...p, w, h };
+            })
+              .sort((a, b) => a.h - b.h || a.w - b.w)
+              .map((p) => {
+                const active = p.width === frame.width && p.height === frame.height;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    title={p.label}
+                    className={`preset-icon${active ? ' active' : ''}`}
+                    onClick={() => setFrame({ width: p.width, height: p.height })}
+                  >
+                    <span className="preset-glyph" style={{ width: p.w, height: p.h }} />
+                  </button>
+                );
+              })}
+          </div>
+          <label className="param inline">
+            <span>w</span>
             <input
               type="number"
               min={16}
               max={4096}
-              value={(graph.frame ?? DEFAULT_FRAME).width}
-              onChange={(e) => setFrame({ ...(graph.frame ?? DEFAULT_FRAME), width: Number(e.target.value) })}
+              value={frame.width}
+              onChange={(e) => setFrame({ ...frame, width: Number(e.target.value) })}
             />
           </label>
-          <label className="param">
-            <span>height</span>
+          <button
+            type="button"
+            className="swap-btn"
+            title="swap width & height"
+            onClick={() => setFrame({ width: frame.height, height: frame.width })}
+          >
+            ⇄
+          </button>
+          <label className="param inline">
+            <span>h</span>
             <input
               type="number"
               min={16}
               max={4096}
-              value={(graph.frame ?? DEFAULT_FRAME).height}
-              onChange={(e) => setFrame({ ...(graph.frame ?? DEFAULT_FRAME), height: Number(e.target.value) })}
+              value={frame.height}
+              onChange={(e) => setFrame({ ...frame, height: Number(e.target.value) })}
             />
           </label>
-        </section>
-        <section className="node-panel inspector">
-          {selected && selectedDef ? (
-            <>
-              <h2>{selected.type} <span className="node-id">{selected.id}</span></h2>
-              {selectedDef.params.length === 0 && <div className="hint">no parameters</div>}
-              {selectedDef.params.map((spec) => (
-                <ParamControl
-                  key={spec.name}
-                  spec={spec}
-                  value={selected.params[spec.name] ?? spec.default}
-                  onChange={(v) => setParam(selected.id, spec.name, v)}
-                />
-              ))}
-            </>
+        </div>
+        <div className="stage">
+          {status === 'booting' ? (
+            <div className="boot-msg">initializing WebGPU…</div>
           ) : (
-            <div className="hint">select a node to edit its parameters</div>
+            <>
+              <canvas ref={canvasRef} />
+              {guide && <canvas ref={guideRef} className="guide-overlay" />}
+            </>
           )}
-        </section>
-        <section className="cook-log">
-          <h2>cook log <span className="pool">pool: {poolStats.live} live / {poolStats.allocated} allocated</span></h2>
+        </div>
+      </div>
+      <details className="cook-log">
+        <summary>
+          cook log
+          <span className="pool">pool: {poolStats.live} live / {poolStats.allocated} allocated</span>
+          {cookError && <span className="cook-error-dot" title={cookError}>●</span>}
+        </summary>
+        <div className="cook-log-body">
           {cookError && <div className="cook-error">{cookError}</div>}
           <ul>
             {events.map((e, i) => (
@@ -166,70 +280,8 @@ export default function App() {
               </li>
             ))}
           </ul>
-        </section>
-      </aside>
-      <main className="main-col">
-        <div className="viewport">
-          {status === 'booting' ? <div className="boot-msg">initializing WebGPU…</div> : <canvas ref={canvasRef} />}
         </div>
-        <div className="editor">
-          <NodeEditor />
-        </div>
-      </main>
+      </details>
     </div>
-  );
-}
-
-function ParamControl({
-  spec,
-  value,
-  onChange,
-}: {
-  spec: ParamSpec;
-  value: ParamValue;
-  onChange: (v: ParamValue) => void;
-}) {
-  if (spec.kind === 'number') {
-    return (
-      <label className="param">
-        <span>{spec.name}</span>
-        <input
-          type="range"
-          min={spec.min}
-          max={spec.max}
-          step={spec.step}
-          value={Number(value)}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
-        <span className="param-value">{String(value)}</span>
-      </label>
-    );
-  }
-  if (spec.kind === 'color') {
-    return (
-      <label className="param">
-        <span>{spec.name}</span>
-        <input type="color" value={String(value)} onChange={(e) => onChange(e.target.value)} />
-        <span className="param-value">{String(value)}</span>
-      </label>
-    );
-  }
-  if (spec.kind === 'select') {
-    return (
-      <label className="param">
-        <span>{spec.name}</span>
-        <select value={String(value)} onChange={(e) => onChange(e.target.value)}>
-          {spec.options.map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
-        </select>
-      </label>
-    );
-  }
-  return (
-    <label className="param">
-      <span>{spec.name}</span>
-      <input type="text" value={String(value)} onChange={(e) => onChange(e.target.value)} />
-    </label>
   );
 }

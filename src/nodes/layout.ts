@@ -88,15 +88,23 @@ export const RandomLayoutNode: NodeDef = {
 
 export const SamplePathNode: NodeDef = {
   type: 'SamplePath',
+  label: 'Sample Path',
   inputs: [{ name: 'path', type: 'vector' }],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
-    { name: 'count', kind: 'number', default: 12, min: 1, max: 500, step: 1 },
+    // gap (arc-length spacing) decides how many points fit; the element lane
+    // (via Place) then decides how many of them get filled
+    { name: 'gap', kind: 'number', default: 40, min: 1, max: 2000, step: 1 },
+    { name: 'offset', kind: 'number', default: 0, min: 0, max: 2000, step: 1 },
     { name: 'tangent', kind: 'select', options: ['rotate', 'upright'], default: 'rotate' },
   ],
   cook(inputs, params) {
     const vector = inputs.path as VectorValue;
-    const samples = samplePathEvenly(flattenPaths(vector.paths), Math.round(Number(params.count)));
+    const samples = samplePathEvenly(
+      flattenPaths(vector.paths),
+      Number(params.gap),
+      Number(params.offset),
+    );
     const placements: Placement[] = samples.map((s, i) => ({
       x: s.x,
       y: s.y,
@@ -111,6 +119,7 @@ export const SamplePathNode: NodeDef = {
 
 export const FunctionLayoutNode: NodeDef = {
   type: 'Function',
+  label: 'Math Function',
   inputs: [],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
@@ -205,6 +214,7 @@ export const SortLayoutNode: NodeDef = {
 
 export const DrawLayoutNode: NodeDef = {
   type: 'DrawLayout',
+  label: 'Draw Layout',
   inputs: [{ name: 'layout', type: 'layout' }],
   outputs: [{ name: 'out', type: 'vector' }],
   params: [{ name: 'size', kind: 'number', default: 8, min: 1, max: 64, step: 1 }],

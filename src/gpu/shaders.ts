@@ -77,15 +77,18 @@ var<private> BAYER: array<f32, 16> = array<f32, 16>(
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   let c = textureSample(tex, samp, in.uv);
+  // quantize the color as seen on white paper; alpha passes through
+  let ink = mix(vec3f(1.0), c.rgb, c.a);
   let cell = vec2i(in.pos.xy / max(u.scale, 1.0)) % vec2i(4, 4);
   let t = (BAYER[cell.y * 4 + cell.x] + 0.5) / 16.0 - 0.5;
   let n = max(u.levels - 1.0, 1.0);
-  let q = floor((c.rgb + vec3f(t / n)) * n + 0.5) / n;
+  let q = floor((ink + vec3f(t / n)) * n + 0.5) / n;
   return vec4f(clamp(q, vec3f(0.0), vec3f(1.0)), c.a);
 }
 `;
 
-// Duotone: map luminance onto a dark->light color ramp.
+// Duotone: map luminance (as seen on white paper) onto a dark->light color
+// ramp. Lays its own paper — the output is opaque.
 export const RECOLOR_FS = /* wgsl */ `
 struct RecolorU { colA: vec4f, colB: vec4f }
 @group(0) @binding(0) var samp: sampler;
@@ -95,8 +98,8 @@ struct RecolorU { colA: vec4f, colB: vec4f }
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   let c = textureSample(tex, samp, in.uv);
-  let lum = dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
-  return vec4f(mix(u.colA.rgb, u.colB.rgb, lum), c.a);
+  let lum = dot(mix(vec3f(1.0), c.rgb, c.a), vec3f(0.2126, 0.7152, 0.0722));
+  return vec4f(mix(u.colA.rgb, u.colB.rgb, lum), 1.0);
 }
 `;
 
@@ -129,7 +132,8 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let dims = vec2f(textureDimensions(tex));
   let cellIdx = floor(in.pos.xy / u.cell);
   let cellUV = (cellIdx + 0.5) * u.cell / dims;
-  let lum = dot(textureSample(tex, samp, cellUV).rgb, vec3f(0.2126, 0.7152, 0.0722));
+  let s = textureSample(tex, samp, cellUV);
+  let lum = dot(mix(vec3f(1.0), s.rgb, s.a), vec3f(0.2126, 0.7152, 0.0722));
   let gi = floor((1.0 - lum) * (u.glyphs - 1.0) + 0.5);
   // inset within the glyph cell so linear filtering can't bleed neighbors
   let local = clamp(fract(in.pos.xy / u.cell), vec2f(0.02), vec2f(0.98));
@@ -138,7 +142,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
-// Luminance or alpha as a signal, written to all channels.
+// Luminance (as seen on white paper) or alpha as a signal, written to all channels.
 export const TO_ALPHA_FS = /* wgsl */ `
 struct ToAlphaU { useAlpha: f32, invert: f32, _p2: f32, _p3: f32 }
 @group(0) @binding(0) var samp: sampler;
@@ -148,7 +152,8 @@ struct ToAlphaU { useAlpha: f32, invert: f32, _p2: f32, _p3: f32 }
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   let c = textureSample(tex, samp, in.uv);
-  var v = select(dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722)), c.a, u.useAlpha > 0.5);
+  let lum = dot(mix(vec3f(1.0), c.rgb, c.a), vec3f(0.2126, 0.7152, 0.0722));
+  var v = select(lum, c.a, u.useAlpha > 0.5);
   v = select(v, 1.0 - v, u.invert > 0.5);
   return vec4f(v, v, v, 1.0);
 }
@@ -223,6 +228,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     default { blended = o.rgb; }                                         // normal
   }
   let a = o.a * u.opacity * m;
-  return vec4f(mix(b.rgb, blended, a), b.a);
+  // src-over alpha so drawing onto a transparent base still registers
+  return vec4f(mix(b.rgb, blended, a), a + b.a * (1.0 - a));
 }
 `;
