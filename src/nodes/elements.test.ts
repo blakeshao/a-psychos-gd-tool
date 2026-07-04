@@ -8,6 +8,7 @@ import * as opentype from 'opentype.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CookContext } from '../engine/registry';
 import type {
+  Element,
   ElementsValue,
   LayoutValue,
   TextValue,
@@ -112,6 +113,54 @@ describe('SamplePath -> Place -> Flatten round trip', () => {
     expect(v.paths.length).toBeGreaterThanOrEqual(6); // every glyph contributed geometry
     expect(v.bounds.width).toBeGreaterThan(100); // spread along the ring, not stacked
     expect(v.bounds.height).toBeGreaterThan(100);
+  });
+
+  it('spread re-spaces the element count evenly along the whole path', async () => {
+    const ellipse = (await ShapeNode.cook({}, { kind: 'ellipse', width: 400, height: 400, sides: 64 }, ctx))
+      .out as VectorValue;
+    const layout = (await SamplePathNode.cook({ path: ellipse }, { gap: 40, offset: 0, tangent: 'rotate' }, ctx))
+      .out as LayoutValue;
+    expect(layout.closed).toBe(true);
+    const slots = layout.placements.length;
+
+    const hex = (await ShapeNode.cook({}, { kind: 'polygon', width: 20, height: 20, sides: 6 }, ctx))
+      .out as VectorValue;
+
+    const place = async (count: number) => {
+      const d = await DuplicatorNode.cook({ in: hex }, { count }, ctx);
+      const placed = await PlaceNode.cook(
+        { elements: d.out, layout },
+        { distribute: 'spread', bindWeight: 'none', bindAmount: 1, seed: 0 },
+        ctx,
+      );
+      return (placed.out as ElementsValue).items;
+    };
+
+    const gapsOf = (items: Element[]) =>
+      items.map((e, i) => {
+        const n = items[(i + 1) % items.length];
+        return Math.hypot(n.transform.x - e.transform.x, n.transform.y - e.transform.y);
+      });
+    const evenWithin = (items: Element[], tol: number) => {
+      const gaps = gapsOf(items);
+      const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
+      return gaps.every((g) => Math.abs(g - mean) / mean < tol);
+    };
+
+    // fewer elements than slots: spread still covers the full loop, evenly —
+    // unlike cycle, which would fill only the first 24 of the slots (a prefix arc)
+    const a = await place(24);
+    expect(a).toHaveLength(24);
+    expect(new Set(a.map((e) => `${e.transform.x.toFixed(2)},${e.transform.y.toFixed(2)}`)).size).toBe(24);
+    expect(evenWithin(a, 0.05)).toBe(true);
+
+    // more elements than slots: still one distinct, evenly-spaced position each —
+    // they re-space, they don't pile onto the existing slots (cycle would wrap)
+    expect(48).toBeGreaterThan(slots);
+    const b = await place(48);
+    expect(b).toHaveLength(48);
+    expect(new Set(b.map((e) => `${e.transform.x.toFixed(2)},${e.transform.y.toFixed(2)}`)).size).toBe(48);
+    expect(evenWithin(b, 0.05)).toBe(true);
   });
 });
 

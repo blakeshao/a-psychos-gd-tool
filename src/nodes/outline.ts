@@ -7,6 +7,7 @@ import type { PathCmd, TextValue, VectorValue } from '../engine/values';
 
 export const OutlineNode: NodeDef = {
   type: 'Outline',
+  label: 'Outline Text',
   inputs: [{ name: 'text', type: 'text' }],
   outputs: [{ name: 'out', type: 'vector' }],
   params: [],

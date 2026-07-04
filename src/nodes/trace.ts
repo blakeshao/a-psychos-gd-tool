@@ -1,20 +1,40 @@
-// Trace (raster => vector) — pixels become paths. The expensive GPU→CPU
-// boundary crossing: readback + imagetracerjs. Async, like a model node —
-// the evaluator awaits it and caches the result like any other cook.
+// Trace (raster => vector) — pixels become paths. The expensive GPU→CPU readback
+// happens here on the main thread; the actual tracing (imagetracer / Sobel) is
+// handed to a Web Worker so it never blocks the UI. See traceWorker.ts.
 
-import ImageTracer from 'imagetracerjs';
 import { boundsOfPaths } from '../engine/path';
 import type { NodeDef } from '../engine/registry';
-import type { PathCmd, RasterValue, VectorValue } from '../engine/values';
+import type { RasterValue, VectorValue } from '../engine/values';
+import { runTrace } from './traceClient';
 
 export const TraceNode: NodeDef = {
   type: 'Trace',
   inputs: [{ name: 'in', type: 'raster' }],
   outputs: [{ name: 'out', type: 'vector' }],
   params: [
+    // fill: quantize to ink/ground and trace filled regions (the original method).
+    // sobel: detect edges first, then trace the resulting line map — good for
+    // turning photos/gradients into outlines rather than solid shapes.
+    { name: 'method', kind: 'select', options: ['fill', 'sobel'], default: 'fill' },
     { name: 'smoothness', kind: 'number', default: 1, min: 0.1, max: 10, step: 0.1 },
     { name: 'minArea', kind: 'number', default: 8, min: 0, max: 100, step: 1 },
-    { name: 'ignoreLight', kind: 'select', options: ['yes', 'no'], default: 'yes' },
+    // gradient-magnitude cutoff (0..~1442); only the sobel method reads it
+    {
+      name: 'threshold',
+      kind: 'number',
+      default: 100,
+      min: 0,
+      max: 500,
+      step: 1,
+      showIf: { param: 'method', in: ['sobel'] },
+    },
+    {
+      name: 'ignoreLight',
+      kind: 'select',
+      options: ['yes', 'no'],
+      default: 'yes',
+      showIf: { param: 'method', in: ['fill'] },
+    },
   ],
   async cook(inputs, params, ctx) {
     const gpu = ctx.gpu;
@@ -22,43 +42,16 @@ export const TraceNode: NodeDef = {
     const src = inputs.in as RasterValue;
 
     const imageData = await gpu.readback(src.texture);
-    // rasters are ink on a transparent ground — trace them as if on white paper
-    const px = imageData.data;
-    for (let i = 0; i < px.length; i += 4) {
-      const a = px[i + 3] / 255;
-      px[i] = Math.round(255 * (1 - a) + px[i] * a);
-      px[i + 1] = Math.round(255 * (1 - a) + px[i + 1] * a);
-      px[i + 2] = Math.round(255 * (1 - a) + px[i + 2] * a);
-      px[i + 3] = 255;
-    }
-    const traced = ImageTracer.imagedataToTracedata(imageData, {
-      ltres: Number(params.smoothness),
-      qtres: Number(params.smoothness),
-      pathomit: Number(params.minArea),
-      numberofcolors: 2,
-      colorsampling: 0,
-      blurradius: 0,
-    });
-
-    const paths: PathCmd[][] = [];
-    traced.layers.forEach((layer, li) => {
-      const c = traced.palette[li];
-      const lum = (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
-      // with 2 colors the light layer is the background — usually unwanted
-      if (params.ignoreLight === 'yes' && lum > 0.5) return;
-      for (const path of layer) {
-        if (path.segments.length === 0) continue;
-        const cmds: PathCmd[] = [{ type: 'M', x: path.segments[0].x1, y: path.segments[0].y1 }];
-        for (const s of path.segments) {
-          if (s.type === 'Q' && s.x3 !== undefined && s.y3 !== undefined) {
-            cmds.push({ type: 'Q', x1: s.x2, y1: s.y2, x: s.x3, y: s.y3 });
-          } else {
-            cmds.push({ type: 'L', x: s.x2, y: s.y2 });
-          }
-        }
-        cmds.push({ type: 'Z' });
-        paths.push(cmds);
-      }
+    const method = String(params.method);
+    // sobel draws dark edges on a light ground — the light layer is always the
+    // background. for fill it's the user's call.
+    const paths = await runTrace({
+      op: method === 'sobel' ? 'sobel' : 'composite',
+      imageData,
+      smoothness: Number(params.smoothness),
+      minArea: Number(params.minArea),
+      threshold: Number(params.threshold),
+      dropLight: method === 'sobel' || params.ignoreLight === 'yes',
     });
 
     const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };

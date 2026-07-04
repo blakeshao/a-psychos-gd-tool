@@ -26,7 +26,7 @@ const nodeTypes = { gfx: GfxNode };
 // Wire colors — a bright 2000s palette, one unique hue per type, matching the
 // socket circle colors in GfxNode.
 const WIRE_COLORS: Record<SocketType, string> = {
-  text: '#7fff00', // chartreuse
+  text: '#00e5ff', // cyan
   vector: '#00a99d', // teal
   raster: '#1493ff', // azure
   alpha: '#8a2be2', // blue violet

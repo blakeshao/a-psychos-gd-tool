@@ -98,6 +98,10 @@ export interface Placement {
 export interface LayoutValue {
   kind: 'layout';
   placements: Placement[];
+  /** placements trace a closed loop (e.g. Sample Path on a ring) — lets Place's
+   * spread mode wrap evenly across the closing segment instead of stopping at
+   * the last sample. Absent/false means an open run. */
+  closed?: boolean;
 }
 
 export type Value = TextValue | VectorValue | RasterValue | AlphaValue | ElementsValue | LayoutValue;

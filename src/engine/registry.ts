@@ -17,12 +17,23 @@ export function socketTypes(spec: SocketSpec): SocketType[] {
   return Array.isArray(spec.type) ? spec.type : [spec.type];
 }
 
-export type ParamSpec =
-  | { name: string; kind: 'string'; default: string }
-  | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number }
-  | { name: string; kind: 'color'; default: string } // '#rrggbb'
-  | { name: string; kind: 'select'; options: string[]; default: string }
-  | { name: string; kind: 'image'; default: string }; // a data: URI — travels with the doc
+/**
+ * When set, the param is only shown in the editor while another param's current
+ * value is one of `in`. Purely a UI affordance — the evaluator always cooks with
+ * every param (filled from defaults), so hidden params keep their default value.
+ */
+export interface ParamVisibility {
+  showIf?: { param: string; in: string[] };
+}
+
+export type ParamSpec = ParamVisibility &
+  (
+    | { name: string; kind: 'string'; default: string }
+    | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number }
+    | { name: string; kind: 'color'; default: string } // '#rrggbb'
+    | { name: string; kind: 'select'; options: string[]; default: string }
+    | { name: string; kind: 'image'; default: string } // a data: URI — travels with the doc
+  );
 
 export interface CookContext {
   /** null in headless tests — CPU nodes must not touch it */

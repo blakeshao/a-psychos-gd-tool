@@ -14,7 +14,7 @@ import { localFontsSupported, useApp } from '../store';
 // matching the wire colors. Sockets (the circles) and the wires that leave them
 // read as the same color.
 export const SOCKET_COLORS: Record<SocketType, string> = {
-  text: '#7fff00', // chartreuse
+  text: '#00e5ff', // cyan
   vector: '#00a99d', // teal
   raster: '#1493ff', // azure
   alpha: '#8a2be2', // blue violet
@@ -38,6 +38,14 @@ export function GfxNode({ id }: NodeProps) {
   if (!node) return null;
   const def = registry.get(node.type);
   if (!def) return <div className="gfx-node">unknown: {node.type}</div>;
+
+  // a param's effective value (instance value, else its def default)
+  const paramVal = (name: string) =>
+    node.params[name] ?? def.params.find((p) => p.name === name)?.default;
+  // hide params gated behind a showIf whose controlling param isn't a match
+  const visibleParams = def.params.filter(
+    (p) => !p.showIf || p.showIf.in.includes(String(paramVal(p.showIf.param))),
+  );
 
   return (
     <div className="gfx-node">
@@ -68,9 +76,9 @@ export function GfxNode({ id }: NodeProps) {
           </div>
         ))}
       </div>
-      {def.params.length > 0 && (
+      {visibleParams.length > 0 && (
         <div className="gfx-params nodrag">
-          {def.params.map((spec) => (
+          {visibleParams.map((spec) => (
             <NodeParam
               key={spec.name}
               spec={spec}

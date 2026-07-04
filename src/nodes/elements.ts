@@ -114,6 +114,54 @@ export const DuplicatorNode: NodeDef = {
   },
 };
 
+/** shortest-arc interpolation between two angles (radians). */
+function lerpAngle(a: number, b: number, t: number): number {
+  return a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
+}
+
+/**
+ * Resample an ordered placement run into `n` slots spaced evenly by arc length,
+ * interpolating position / rotation / scale / weight between the originals. This
+ * is what lets a Sample Path layout follow the curve at any element count: the
+ * count drives the spacing, independent of how densely the path was sampled.
+ * A closed run wraps across the closing segment so the last slot doesn't double
+ * the first.
+ */
+function spreadAlongPath(layout: Placement[], closed: boolean, n: number): Placement[] {
+  // a single sample (or single element) has nothing to space along
+  if (layout.length === 1 || n === 1) {
+    return Array.from({ length: n }, (_, i) => ({ ...layout[0], index: i }));
+  }
+
+  const ring = closed ? [...layout, layout[0]] : layout;
+  const cum = [0];
+  for (let i = 1; i < ring.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(ring[i].x - ring[i - 1].x, ring[i].y - ring[i - 1].y));
+  }
+  const total = cum[cum.length - 1];
+  if (total === 0) return Array.from({ length: n }, (_, i) => ({ ...layout[0], index: i }));
+
+  const out: Placement[] = [];
+  for (let i = 0; i < n; i++) {
+    // closed: spread over the full loop (i/n); open: endpoints included (i/(n-1))
+    const target = (closed ? i / n : i / (n - 1)) * total;
+    let seg = 0;
+    while (seg < ring.length - 2 && cum[seg + 1] < target) seg++;
+    const span = cum[seg + 1] - cum[seg];
+    const local = span === 0 ? 0 : (target - cum[seg]) / span;
+    const a = ring[seg], b = ring[seg + 1];
+    out.push({
+      x: a.x + (b.x - a.x) * local,
+      y: a.y + (b.y - a.y) * local,
+      rotation: lerpAngle(a.rotation, b.rotation, local),
+      scale: a.scale + (b.scale - a.scale) * local,
+      weight: a.weight + (b.weight - a.weight) * local,
+      index: i,
+    });
+  }
+  return out;
+}
+
 export const PlaceNode: NodeDef = {
   type: 'Place',
   inputs: [
@@ -122,24 +170,37 @@ export const PlaceNode: NodeDef = {
   ],
   outputs: [{ name: 'out', type: 'elements' }],
   params: [
-    { name: 'distribute', kind: 'select', options: ['cycle', 'by-index', 'shuffle'], default: 'cycle' },
+    // spread: re-space the elements evenly along the layout (treated as an
+    //   ordered path), so the element count drives the spacing — add copies and
+    //   they re-distribute instead of stacking. cycle/by-index/shuffle snap each
+    //   element to an existing slot (good for grids; a prefix of a Sample Path).
+    { name: 'distribute', kind: 'select', options: ['spread', 'cycle', 'by-index', 'shuffle'], default: 'cycle' },
     { name: 'bindWeight', kind: 'select', options: ['none', 'scale', 'rotation'], default: 'none' },
     { name: 'bindAmount', kind: 'number', default: 1, min: 0, max: 1, step: 0.01 },
     { name: 'seed', kind: 'number', default: 0, min: 0, max: 9999, step: 1 },
   ],
   cook(inputs, params) {
     const elements = asElements(inputs.elements as Value);
-    const layout = (inputs.layout as LayoutValue).placements;
+    const layoutValue = inputs.layout as LayoutValue;
+    const layout = layoutValue.placements;
     const amount = Number(params.bindAmount);
     const seed = Number(params.seed);
     if (elements.length === 0 || layout.length === 0) {
       return { out: { kind: 'elements', items: [] } satisfies ElementsValue };
     }
 
-    // The element lane decides how many: one output item per element. The
-    // layout only supplies positions — extra placements (e.g. unused grid
-    // cells) stay empty; if elements outnumber placements they wrap.
+    // spread mode resamples the layout into exactly one slot per element, evenly
+    // along the path — so changing the element count re-spaces everything.
+    const spread =
+      params.distribute === 'spread'
+        ? spreadAlongPath(layout, layoutValue.closed ?? false, elements.length)
+        : null;
+
+    // The element lane decides how many: one output item per element. cycle/
+    // by-index/shuffle snap to existing slots — extra placements (e.g. unused
+    // grid cells) stay empty; if elements outnumber placements they wrap.
     const slotFor = (e: Element, i: number): Placement => {
+      if (spread) return spread[i];
       if (params.distribute === 'by-index') {
         return layout.find((p) => p.index === e.index) ?? layout[i % layout.length];
       }

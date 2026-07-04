@@ -17,6 +17,10 @@ import { useApp } from './store';
 
 const FONT_URLS = ['/fonts/Inter-Regular.otf', '/fonts/JetBrainsMono-Regular.ttf', '/fonts/local-fallback.ttf'];
 
+// only show the loading overlay once a cook has run this long — keeps quick
+// re-cooks (most param tweaks) from flashing it
+const PENDING_DELAY_MS = 250;
+
 const FRAME_PRESETS: { label: string; width: number; height: number }[] = [
   { label: 'Phone — 2304×3456', width: 2304, height: 3456 },
   { label: 'Square — 2048×2048', width: 2048, height: 2048 },
@@ -55,6 +59,7 @@ export default function App() {
   const [events, setEvents] = useState<CookEvent[]>([]);
   const [poolStats, setPoolStats] = useState({ allocated: 0, free: 0, live: 0 });
   const [cookError, setCookError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [guide, setGuide] = useState<Placement[] | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,6 +91,10 @@ export default function App() {
     if (!gpu || !canvas) return;
     if (busyRef.current) { queuedRef.current = g; return; }
     busyRef.current = true;
+    // lax loading: most cooks are instant, so only reveal the overlay once a cook
+    // has been running long enough to actually feel like a wait. fast cooks clear
+    // the timer before it fires and never flash the overlay.
+    const showTimer = setTimeout(() => setPending(true), PENDING_DELAY_MS);
     const ctx: CookContext = {
       gpu,
       fonts: new Map(Object.entries(useApp.getState().fonts)),
@@ -105,10 +114,13 @@ export default function App() {
     } catch (err) {
       setCookError(err instanceof Error ? err.message : String(err));
     } finally {
+      clearTimeout(showTimer);
       busyRef.current = false;
       const queued = queuedRef.current;
       queuedRef.current = null;
+      // keep the overlay up if another cook is already queued behind this one
       if (queued) runCook(queued);
+      else setPending(false);
     }
   }, []);
 
@@ -258,6 +270,7 @@ export default function App() {
             <>
               <canvas ref={canvasRef} />
               {guide && <canvas ref={guideRef} className="guide-overlay" />}
+              {pending && <div className="cook-pending" role="status" aria-label="rendering" />}
             </>
           )}
         </div>

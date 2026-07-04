@@ -15,7 +15,7 @@
   --muted-2: #888888;
   --rule: #e5e5e5;
   --accent: #ff1493; /* deep pink */
-  --accent-2: #4169e1; /* royal blue */
+  --accent-2: #0036d9; /* royal blue */
   color-scheme: light;
 }
 
@@ -149,6 +149,24 @@ body {
   border: none !important;
 }
 
+/* loading overlay shown while a cook is pending: a soft blur over the output
+   that gently breathes (the blur fades in and out). animating opacity runs on the
+   compositor thread, so the breathing stays smooth regardless of main-thread work. */
+.cook-pending {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* the rest of the UI stays usable */
+  background: rgba(250, 250, 250, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: cook-breathe 2.6s ease-in-out infinite;
+  will-change: opacity;
+}
+@keyframes cook-breathe {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.9; }
+}
+
 .hint { color: var(--muted-2); }
 
 .boot-msg { padding: 40px; color: var(--muted); }
@@ -183,7 +201,7 @@ body {
   background: var(--panel-solid); border: 1px solid var(--border); border-radius: 0;
   width: 130px; font-size: 10px; color: var(--text);
 }
-.react-flow__node.selected .gfx-node { border-color: var(--accent); }
+.react-flow__node.selected .gfx-node { border-color: var(--border-strong); }
 .gfx-title {
   padding: 5px 8px; font-weight: 600; border-bottom: 1px solid var(--rule);
   background: var(--panel-solid); border-radius: 0;
