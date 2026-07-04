@@ -100,20 +100,28 @@ export const SamplePathNode: NodeDef = {
   ],
   cook(inputs, params) {
     const vector = inputs.path as VectorValue;
-    const samples = samplePathEvenly(
-      flattenPaths(vector.paths),
-      Number(params.gap),
-      Number(params.offset),
-    );
+    const polys = flattenPaths(vector.paths);
+    const samples = samplePathEvenly(polys, Number(params.gap), Number(params.offset));
+    // a loop layout (every contour closed, like a silhouette outline) lets Place
+    // spread elements across the closing segment too, with no seam.
+    const closed = polys.length > 0 && polys.every((p) => p.closed);
+    // The path lives in its source space (a traced image is in top-left frame
+    // pixels), but layouts are origin-at-center like Grid/Function/Random — and
+    // the element renderer treats (0,0) as the artboard center. Recenter on the
+    // path's bounds center (as Rasterize does for vectors) so the arrangement
+    // sits where the shape sits instead of being pushed off the artboard.
+    const b = vector.bounds;
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
     const placements: Placement[] = samples.map((s, i) => ({
-      x: s.x,
-      y: s.y,
+      x: s.x - cx,
+      y: s.y - cy,
       rotation: params.tangent === 'rotate' ? s.rotation : 0,
       scale: 1,
       weight: s.t, // arc-length position as the density signal
       index: i,
     }));
-    return { out: { kind: 'layout', placements } satisfies LayoutValue };
+    return { out: { kind: 'layout', placements, closed } satisfies LayoutValue };
   },
 };
 

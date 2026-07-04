@@ -27,6 +27,8 @@ import {
 import { ShapeNode } from './shape';
 import { TextNode } from './text';
 import { TraceNode } from './trace';
+import { OutlineImageNode } from './outlineImage';
+import { RemoveBackgroundNode } from './removeBackground';
 import { DisplaceNode, WarpNode } from './vectorOps';
 
 /** A palette section: a category heading and the nodes filed under it. */
@@ -53,7 +55,10 @@ export const PALETTE: NodeCategory[] = [
   },
   { category: 'Placement', nodes: [DuplicatorNode, PlaceNode] },
   // Flatten is Conversion's elements => vector step down the type ladder.
-  { category: 'Conversion', nodes: [OutlineNode, RasterizeNode, TraceNode, ToAlphaNode, DrawLayoutNode, FlattenNode] },
+  {
+    category: 'Conversion',
+    nodes: [OutlineNode, RasterizeNode, TraceNode, RemoveBackgroundNode, OutlineImageNode, ToAlphaNode, DrawLayoutNode, FlattenNode],
+  },
   { category: 'Composition', nodes: [CompositeNode] },
   { category: 'Output', nodes: [OutputNode] },
 ];
