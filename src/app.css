@@ -65,6 +65,14 @@ body {
 }
 .swap-btn:hover { background: var(--panel-3); border-color: var(--border-strong); }
 
+.export-btn {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 0; padding: 3px 10px; font: inherit; cursor: pointer; line-height: 1;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.export-btn:hover { background: var(--panel-3); border-color: var(--border-strong); }
+.export-btn:disabled { color: var(--muted); cursor: default; }
+
 .node-id { color: var(--muted-2); font-weight: normal; }
 
 /* node map (left) + poster (right) */
