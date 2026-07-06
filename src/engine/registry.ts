@@ -57,6 +57,12 @@ export interface NodeDef {
   params: ParamSpec[];
   /** set when cook() reads ctx.frame — the evaluator folds the frame into this node's hash */
   usesFrame?: boolean;
+  /**
+   * Extra entries folded into this node's hash, for ambient context the cook
+   * reads beyond params/inputs — e.g. Text hashes the font it actually
+   * resolved, so a font that finishes loading invalidates the cached fallback.
+   */
+  hashExtras?(params: Record<string, ParamValue>, ctx: CookContext): Record<string, string>;
   cook(
     inputs: Record<string, Value>,
     params: Record<string, ParamValue>,

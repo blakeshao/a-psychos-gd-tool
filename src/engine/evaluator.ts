@@ -108,11 +108,14 @@ export class Evaluator {
       }
 
       // 3. content hash → cache lookup. Frame-aware nodes hash the frame too,
-      // so a frame change re-cooks exactly the nodes that read it.
+      // so a frame change re-cooks exactly the nodes that read it; hashExtras
+      // folds in any other ambient context the cook resolves (e.g. fonts).
       const params = paramsWithDefaults(def, node.params);
-      const hashParams = def.usesFrame
-        ? { ...params, '@frame': `${ctx.frame.width}x${ctx.frame.height}` }
-        : params;
+      const hashParams = {
+        ...params,
+        ...(def.usesFrame ? { '@frame': `${ctx.frame.width}x${ctx.frame.height}` } : undefined),
+        ...def.hashExtras?.(params, ctx),
+      };
       const hash = hashNode(node.type, hashParams, inputHashes);
       this.latestHash.set(nodeId, hash);
       const cached = this.entries.get(hash);
