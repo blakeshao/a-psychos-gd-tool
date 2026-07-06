@@ -299,6 +299,7 @@ function ImageUpload({ value, onChange }: { value: string; onChange: (v: ParamVa
 function FontSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const fonts = useApp((s) => s.fonts);
   const localFonts = useApp((s) => s.localFonts);
+  const loadLocalFont = useApp((s) => s.loadLocalFont);
   const loadLocalFonts = useApp((s) => s.loadLocalFonts);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -323,6 +324,9 @@ function FontSelect({ value, onChange }: { value: string; onChange: (v: string) 
 
   const choose = (f: string) => {
     onChange(f);
+    // start parsing right away instead of waiting for the graph→effect
+    // round-trip; no-ops for 'default' and already-loaded fonts
+    loadLocalFont(f);
     setOpen(false);
     setQuery('');
   };

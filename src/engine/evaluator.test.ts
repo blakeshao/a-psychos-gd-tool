@@ -216,6 +216,34 @@ describe('Evaluator', () => {
     expect((second.outputs.out as never as { v: number }).v).toBe(201);
   });
 
+  it('re-cooks via hashExtras when the resolved context changes', async () => {
+    const registry = stubRegistry({});
+    // mirrors Text's font fallback: cook resolves the requested font from
+    // ctx.fonts or falls back, and hashExtras folds the resolved key into the
+    // hash so the cached fallback cook is invalidated once the font loads
+    registry.set('Fonty', {
+      type: 'Fonty',
+      inputs: [],
+      outputs: [{ name: 'out', type: 'raster' }],
+      params: [{ name: 'font', kind: 'string', default: 'wanted' }],
+      hashExtras: (p, c) => ({ '@font': c.fonts.has(String(p.font)) ? String(p.font) : 'default' }),
+      cook: (_i, p, c) => ({ out: num(c.fonts.has(String(p.font)) ? 1 : 0) }),
+    });
+    const ev = new Evaluator(registry);
+    const g: Graph = { nodes: { t: { id: 't', type: 'Fonty', params: {} } }, edges: [] };
+
+    const before = await ev.evaluate(g, 't', { ...ctx, fonts: new Map() });
+    expect((before.outputs.out as never as { v: number }).v).toBe(0); // cooked with the fallback
+
+    const loaded = new Map([['wanted', {} as never]]);
+    const after = await ev.evaluate(g, 't', { ...ctx, fonts: loaded });
+    expect(statuses(ev)).toEqual({ t: 'miss' }); // the arriving font invalidates the fallback cook
+    expect((after.outputs.out as never as { v: number }).v).toBe(1);
+
+    await ev.evaluate(g, 't', { ...ctx, fonts: loaded });
+    expect(statuses(ev)).toEqual({ t: 'hit' }); // stable once resolved
+  });
+
   it('awaits async nodes with no special casing', async () => {
     const ev = new Evaluator(stubRegistry({}));
     const g: Graph = {

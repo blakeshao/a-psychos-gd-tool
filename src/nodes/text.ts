@@ -2,8 +2,17 @@
 // kerning applied) so Split can later peel off glyphs that keep their
 // kerned positions and index.
 
-import type { NodeDef } from '../engine/registry';
+import type { ParamValue } from '../engine/graph';
+import type { CookContext, NodeDef } from '../engine/registry';
 import type { PositionedGlyph, StrokeAlign, Style, TextValue } from '../engine/values';
+
+// fall back to the bundled default (always loaded before the app is usable)
+// rather than failing the cook — e.g. a saved graph referencing a local font
+// that isn't installed on this machine, or one still parsing in the background
+function resolveFontKey(params: Record<string, ParamValue>, ctx: CookContext): string {
+  const requested = String(params.font);
+  return ctx.fonts.has(requested) ? requested : 'default';
+}
 
 export const TextNode: NodeDef = {
   type: 'Text',
@@ -20,14 +29,14 @@ export const TextNode: NodeDef = {
     { name: 'strokeWidth', kind: 'number', default: 4, min: 0, max: 50, step: 0.5, showIf: { param: 'stroke', in: ['true'] } },
     { name: 'strokeAlign', kind: 'select', options: ['center', 'inside', 'outside'], default: 'center', showIf: { param: 'stroke', in: ['true'] } },
   ],
+  // hash the font the cook will actually use, not just the `font` param: a
+  // cook that ran before the requested font finished loading shaped with the
+  // fallback, and only this hash flipping invalidates that cached result
+  hashExtras: (params, ctx) => ({ '@font': resolveFontKey(params, ctx) }),
   cook(_inputs, params, ctx) {
-    // fall back to the bundled default (always loaded before the app is
-    // usable) rather than failing the cook — e.g. a saved graph referencing
-    // a local font that isn't installed on this machine
-    const requestedKey = String(params.font);
-    const fontKey = ctx.fonts.has(requestedKey) ? requestedKey : 'default';
+    const fontKey = resolveFontKey(params, ctx);
     const font = ctx.fonts.get(fontKey);
-    if (!font) throw new Error(`font not loaded: ${requestedKey}`);
+    if (!font) throw new Error(`font not loaded: ${String(params.font)}`);
     const content = String(params.content);
     const fontSize = Number(params.fontSize);
     const scale = fontSize / font.unitsPerEm;
