@@ -61,6 +61,7 @@ export default function App() {
   const [poolStats, setPoolStats] = useState({ allocated: 0, free: 0, live: 0 });
   const [cookError, setCookError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [guide, setGuide] = useState<Placement[] | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -125,6 +126,50 @@ export default function App() {
       else setPending(false);
     }
   }, []);
+
+  // Export re-evaluates through the cache (all HITs unless the doc changed
+  // mid-click), reads the output texture back to the CPU, and downloads a PNG.
+  // Shares busyRef with runCook: cache eviction only happens inside evaluate(),
+  // so serializing against cooks keeps the texture alive through readback.
+  const exportPng = useCallback(async () => {
+    const gpu = gpuRef.current;
+    if (!gpu || busyRef.current) return;
+    busyRef.current = true;
+    setExporting(true);
+    try {
+      const g = useApp.getState().graph;
+      const outputId = findOutputNode(g);
+      if (!outputId) { setCookError('add an Output node to export'); return; }
+      const ctx: CookContext = {
+        gpu,
+        fonts: new Map(Object.entries(useApp.getState().fonts)),
+        frame: g.frame ?? DEFAULT_FRAME,
+      };
+      const result = await evaluatorRef.current.evaluate(g, outputId, ctx);
+      const raster = result.outputs.out as RasterValue;
+      const image = await gpu.readback(raster.texture);
+      const off = document.createElement('canvas');
+      off.width = image.width;
+      off.height = image.height;
+      off.getContext('2d')!.putImageData(image, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => off.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG encoding failed');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `poster-${image.width}x${image.height}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setCookError(err instanceof Error ? err.message : String(err));
+    } finally {
+      busyRef.current = false;
+      setExporting(false);
+      const queued = queuedRef.current;
+      queuedRef.current = null;
+      if (queued) runCook(queued);
+    }
+  }, [runCook]);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -277,6 +322,15 @@ export default function App() {
               onChange={(e) => setFrame({ ...frame, height: Number(e.target.value) })}
             />
           </label>
+          <button
+            type="button"
+            className="export-btn"
+            title="download the poster as a PNG"
+            disabled={status !== 'ready' || exporting}
+            onClick={exportPng}
+          >
+            {exporting ? 'exporting…' : 'export png'}
+          </button>
         </div>
         <div className="stage">
           {status === 'booting' ? (
