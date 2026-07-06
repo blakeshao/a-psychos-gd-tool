@@ -21,9 +21,13 @@ export const TextNode: NodeDef = {
     { name: 'strokeAlign', kind: 'select', options: ['center', 'inside', 'outside'], default: 'center', showIf: { param: 'stroke', in: ['true'] } },
   ],
   cook(_inputs, params, ctx) {
-    const fontKey = String(params.font);
+    // fall back to the bundled default (always loaded before the app is
+    // usable) rather than failing the cook — e.g. a saved graph referencing
+    // a local font that isn't installed on this machine
+    const requestedKey = String(params.font);
+    const fontKey = ctx.fonts.has(requestedKey) ? requestedKey : 'default';
     const font = ctx.fonts.get(fontKey);
-    if (!font) throw new Error(`font not loaded: ${fontKey}`);
+    if (!font) throw new Error(`font not loaded: ${requestedKey}`);
     const content = String(params.content);
     const fontSize = Number(params.fontSize);
     const scale = fontSize / font.unitsPerEm;

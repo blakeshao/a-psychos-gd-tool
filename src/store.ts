@@ -65,7 +65,7 @@ const factoryGraph: Graph = {
       id: 'text1',
       type: 'Text',
       params: {
-        content: 'PSYCHO', fontSize: 400, font: 'Dotted Songti Square', fill: '#ffffff', weight: 400,
+        content: 'PSYCHO', fontSize: 400, font: 'default', fill: '#ffffff', weight: 400,
         stroke: true, strokeColor: '#00b395', strokeWidth: 45, strokeAlign: 'outside',
       },
       position: { x: -131, y: 68 },
