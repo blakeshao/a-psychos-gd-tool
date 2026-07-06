@@ -8,7 +8,8 @@
 // of this cook later without touching its sockets.
 
 import type { NodeDef } from '../engine/registry';
-import type { PathCmd, RasterValue, VectorValue } from '../engine/values';
+import type { RasterValue, VectorValue } from '../engine/values';
+import { appendPath, paintPath } from '../gpu/paint';
 
 export const RasterizeNode: NodeDef = {
   type: 'Rasterize',
@@ -28,12 +29,11 @@ export const RasterizeNode: NodeDef = {
     // center the geometry on the artboard
     const b = vector.bounds;
     c2d.translate(width / 2 - (b.x + b.width / 2), height / 2 - (b.y + b.height / 2));
-    c2d.fillStyle = '#000000';
     // one fill across ALL subpaths: hole contours must subtract via nonzero
     // winding, which only works inside a single path
     const combined = new Path2D();
     for (const path of vector.paths) appendPath(combined, path);
-    c2d.fill(combined);
+    paintPath(c2d, combined, vector.style);
 
     const t = gpu.pool.acquire(width, height);
     gpu.device.queue.copyExternalImageToTexture(
@@ -46,15 +46,3 @@ export const RasterizeNode: NodeDef = {
     return { out: value };
   },
 };
-
-export function appendPath(p: Path2D, cmds: PathCmd[]) {
-  for (const cmd of cmds) {
-    switch (cmd.type) {
-      case 'M': p.moveTo(cmd.x, cmd.y); break;
-      case 'L': p.lineTo(cmd.x, cmd.y); break;
-      case 'C': p.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y); break;
-      case 'Q': p.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y); break;
-      case 'Z': p.closePath(); break;
-    }
-  }
-}

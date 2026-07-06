@@ -23,7 +23,7 @@ export const OutlineNode: NodeDef = {
       paths.push(path.commands as PathCmd[]);
     }
 
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style: text.style };
     return { out: value };
   },
 };

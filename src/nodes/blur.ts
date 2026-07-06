@@ -9,7 +9,7 @@ export const BlurNode: NodeDef = {
   type: 'Blur',
   inputs: [{ name: 'in', type: 'raster' }],
   outputs: [{ name: 'out', type: 'raster' }],
-  params: [{ name: 'radius', kind: 'number', default: 8, min: 0, max: 64, step: 1 }],
+  params: [{ name: 'radius', kind: 'number', default: 8, min: 0, step: 1 }],
   cook(inputs, params, ctx) {
     const gpu = ctx.gpu;
     if (!gpu) throw new Error('Blur needs a GPU context');

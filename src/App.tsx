@@ -13,7 +13,7 @@ import type { Placement, RasterValue } from './engine/values';
 import { GpuContext } from './gpu/device';
 import { registry } from './nodes';
 import { NodeEditor } from './editor/NodeEditor';
-import { useApp } from './store';
+import { loadLocalFontsIfGranted, useApp } from './store';
 
 const FONT_URLS = ['/fonts/Inter-Regular.otf', '/fonts/JetBrainsMono-Regular.ttf', '/fonts/local-fallback.ttf'];
 
@@ -53,6 +53,7 @@ export default function App() {
   const graph = useApp((s) => s.graph);
   const selectedNodeId = useApp((s) => s.selectedNodeId);
   const fonts = useApp((s) => s.fonts);
+  const localFonts = useApp((s) => s.localFonts);
   const setFrame = useApp((s) => s.setFrame);
 
   const [status, setStatus] = useState<Status>('booting');
@@ -71,6 +72,7 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    loadLocalFontsIfGranted(); // fire-and-forget; boot doesn't wait on the list
     (async () => {
       const gpu = await GpuContext.init();
       if (cancelled) return;
@@ -131,7 +133,8 @@ export default function App() {
   }, [graph, status, runCook, fonts]);
 
   // Parse any local font a Text node references but that isn't loaded yet;
-  // addFont then bumps `fonts`, which re-cooks via the effect above.
+  // addFont then bumps `fonts`, which re-cooks via the effect above. Also runs
+  // when `localFonts` arrives so a saved document's fonts load right at startup.
   useEffect(() => {
     const { fonts: loaded, loadLocalFont } = useApp.getState();
     for (const node of Object.values(graph.nodes)) {
@@ -139,7 +142,7 @@ export default function App() {
       const key = String(node.params.font ?? 'default');
       if (key !== 'default' && !loaded[key]) loadLocalFont(key);
     }
-  }, [graph, fonts]);
+  }, [graph, fonts, localFonts]);
 
   // Selecting a node that produces a layout shows its placements as a guide
   // over the artboard. Cooked with a throwaway CPU-only evaluator so the main
@@ -170,7 +173,8 @@ export default function App() {
     return () => { cancelled = true; };
   }, [graph, selectedNodeId, status]);
 
-  // draw the guide markers: position circle + rotation tick, artboard-centered
+  // draw the guide, artboard-centered: placements with cell extents (Grid) draw
+  // their actual rect; point placements keep the circle + rotation tick marker
   useEffect(() => {
     const canvas = guideRef.current;
     if (!canvas || !guide) return;
@@ -185,6 +189,17 @@ export default function App() {
     for (const p of guide) {
       const x = width / 2 + p.x;
       const y = height / 2 + p.y;
+      if (p.w != null && p.h != null) {
+        c.save();
+        c.translate(x, y);
+        c.rotate(p.rotation);
+        c.strokeRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        c.restore();
+        c.beginPath();
+        c.arc(x, y, c.lineWidth * 1.5, 0, Math.PI * 2);
+        c.fill();
+        continue;
+      }
       const r = 7 * p.scale;
       c.beginPath();
       c.arc(x, y, r, 0, Math.PI * 2);

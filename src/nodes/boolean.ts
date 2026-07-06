@@ -55,7 +55,8 @@ export const BooleanNode: NodeDef = {
   outputs: [{ name: 'out', type: 'vector' }],
   params: [{ name: 'op', kind: 'select', options: ['union', 'subtract', 'intersect'], default: 'subtract' }],
   cook(inputs, params) {
-    const a = toPaperItem(inputs.a as VectorValue);
+    const srcA = inputs.a as VectorValue;
+    const a = toPaperItem(srcA);
     const b = toPaperItem(inputs.b as VectorValue);
     let result: paper.PathItem;
     switch (params.op) {
@@ -64,7 +65,8 @@ export const BooleanNode: NodeDef = {
       default: result = a.subtract(b, { insert: false });
     }
     const paths = fromPaperItem(result);
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    // the a-side is the operand being carved/kept — its style wins
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style: srcA.style };
     return { out: value };
   },
 };

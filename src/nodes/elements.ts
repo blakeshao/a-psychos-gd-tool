@@ -1,6 +1,13 @@
 // The element lane: Split peels live type into pieces, Duplicator multiplies
 // a vector, Place zips elements onto layout placements, Flatten is the
 // explicit conversion back down the ladder (elements => vector).
+//
+// Division of labor with the layout lane (layout.ts): the lane decides what
+// slots exist and what signal rides on them; the element lane decides how
+// many things exist; Place alone decides how they meet — assignment order,
+// keyed joins, spacing (spread), and how the slot channels bend the
+// transform (bind). Ordering lives here, not in a layout node, so slot
+// `index` stays stable identity for its whole life.
 
 import { boundsOfPaths, transformPaths } from '../engine/path';
 import type { NodeDef } from '../engine/registry';
@@ -10,6 +17,7 @@ import type {
   LayoutValue,
   PathCmd,
   Placement,
+  Style,
   TextValue,
   Value,
   VectorValue,
@@ -24,7 +32,7 @@ import { latticeHash } from '../util/noise';
 export function asElements(v: Value): Element[] {
   if (v.kind === 'elements') return v.items;
   if (v.kind === 'vector' || v.kind === 'raster' || v.kind === 'text') {
-    return [{ content: v, transform: { x: 0, y: 0, rotation: 0, scale: 1 }, index: 0, weight: 1 }];
+    return [{ content: v, transform: { x: 0, y: 0, rotation: 0, scale: 1 }, index: 0, progress: 0, weight: 1 }];
   }
   throw new Error(`cannot treat ${v.kind} as elements`);
 }
@@ -54,9 +62,11 @@ export const SplitNode: NodeDef = {
             fontKey: text.fontKey,
             fontSize: text.fontSize,
             width: glyphs[glyphs.length - 1].x - x0,
+            style: text.style,
           },
           transform: { x: x0, y: 0, rotation: 0, scale: 1 }, // keeps its shaped position
           index: wordIdx++,
+          progress: 0, // filled below once the count is known
           weight: 1,
         });
       };
@@ -77,14 +87,17 @@ export const SplitNode: NodeDef = {
             fontKey: text.fontKey,
             fontSize: text.fontSize,
             width: 0,
+            style: text.style,
           },
           transform: { x: g.x, y: g.y, rotation: 0, scale: 1 }, // kerned position preserved
           index: i,
+          progress: 0, // filled below once the count is known
           weight: 1,
         });
       });
     }
 
+    items.forEach((el, k) => (el.progress = items.length === 1 ? 0 : k / (items.length - 1)));
     const value: ElementsValue = { kind: 'elements', items };
     return { out: value };
   },
@@ -105,7 +118,8 @@ export const DuplicatorNode: NodeDef = {
           content: el.content, // copies share content; transforms differ after Place
           transform: { ...el.transform },
           index: items.length,
-          weight: count === 1 ? 1 : i / (count - 1),
+          progress: count === 1 ? 0 : i / (count - 1), // copy fraction — position, not density
+          weight: 1,
         });
       }
     }
@@ -141,6 +155,17 @@ function spreadAlongPath(layout: Placement[], closed: boolean, n: number): Place
   const total = cum[cum.length - 1];
   if (total === 0) return Array.from({ length: n }, (_, i) => ({ ...layout[0], index: i }));
 
+  // named channels lerp too; a side missing the name reads as neutral 1
+  const lerpChannels = (a: Placement, b: Placement, t: number): Record<string, number> | undefined => {
+    if (!a.channels && !b.channels) return undefined;
+    const out: Record<string, number> = {};
+    for (const k of new Set([...Object.keys(a.channels ?? {}), ...Object.keys(b.channels ?? {})])) {
+      const av = a.channels?.[k] ?? 1, bv = b.channels?.[k] ?? 1;
+      out[k] = av + (bv - av) * t;
+    }
+    return out;
+  };
+
   const out: Placement[] = [];
   for (let i = 0; i < n; i++) {
     // closed: spread over the full loop (i/n); open: endpoints included (i/(n-1))
@@ -155,11 +180,50 @@ function spreadAlongPath(layout: Placement[], closed: boolean, n: number): Place
       y: a.y + (b.y - a.y) * local,
       rotation: lerpAngle(a.rotation, b.rotation, local),
       scale: a.scale + (b.scale - a.scale) * local,
+      progress: a.progress + (b.progress - a.progress) * local,
       weight: a.weight + (b.weight - a.weight) * local,
+      channels: lerpChannels(a, b, local),
       index: i,
     });
   }
   return out;
+}
+
+/** One channel binding: slot signal → element property. */
+export interface BindSpec {
+  /** 'weight', 'progress', or a named channel a Weight node wrote */
+  channel: string;
+  target: 'scale' | 'rotation' | 'blur';
+  /** scale/rotation: 0..1 strength; blur: radius in px at signal 1 */
+  amount: number;
+  /** flip the signal (1 − s) before applying */
+  invert?: boolean;
+  /** added to the signal after invert — biases where the effect sits */
+  offset?: number;
+}
+
+export const BIND_TARGETS: BindSpec['target'][] = ['scale', 'rotation', 'blur'];
+
+/** Parse a binds param (JSON) defensively — malformed rows drop, never throw. */
+export function parseBinds(raw: unknown): BindSpec[] {
+  try {
+    const arr: unknown = JSON.parse(String(raw ?? '[]'));
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (b): b is BindSpec =>
+        !!b && typeof b === 'object'
+        && typeof (b as BindSpec).channel === 'string'
+        && BIND_TARGETS.includes((b as BindSpec).target)
+        && Number.isFinite(Number((b as BindSpec).amount)),
+    ).map((b) => ({
+      ...b,
+      amount: Number(b.amount),
+      invert: b.invert === true,
+      offset: Number.isFinite(Number(b.offset)) ? Number(b.offset) : 0,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export const PlaceNode: NodeDef = {
@@ -170,59 +234,99 @@ export const PlaceNode: NodeDef = {
   ],
   outputs: [{ name: 'out', type: 'elements' }],
   params: [
+    // by-order: zip elements onto slots in `order` (extra slots stay empty; if
+    //   elements outnumber slots they wrap). by-index: keyed join on slot
+    //   identity — elements whose slot is gone (Filtered away) sit out.
     // spread: re-space the elements evenly along the layout (treated as an
-    //   ordered path), so the element count drives the spacing — add copies and
-    //   they re-distribute instead of stacking. cycle/by-index/shuffle snap each
-    //   element to an existing slot (good for grids; a prefix of a Sample Path).
-    { name: 'distribute', kind: 'select', options: ['spread', 'cycle', 'by-index', 'shuffle'], default: 'cycle' },
-    { name: 'bindWeight', kind: 'select', options: ['none', 'scale', 'rotation'], default: 'none' },
-    { name: 'bindAmount', kind: 'number', default: 1, min: 0, max: 1, step: 0.01 },
-    { name: 'seed', kind: 'number', default: 0, min: 0, max: 9999, step: 1 },
+    //   ordered path), so the element count drives the spacing — add copies
+    //   and they re-distribute instead of stacking.
+    { name: 'distribute', kind: 'select', options: ['by-order', 'by-index', 'spread'], default: 'by-order' },
+    // nudge the whole arrangement — every placed element shifts by this much
+    { name: 'offsetX', kind: 'number', default: 0, min: -1000, max: 1000, step: 1 },
+    { name: 'offsetY', kind: 'number', default: 0, min: -1000, max: 1000, step: 1 },
+    // slot consumption order — Sort, absorbed. `source` = the generator's fill
+    // order; `random` is a seeded permutation (every slot used once).
+    { name: 'order', kind: 'select', options: ['source', 'x', 'y', 'progress', 'weight', 'random'], default: 'source', showIf: { param: 'distribute', in: ['by-order', 'spread'] } },
+    { name: 'reverse', kind: 'select', options: ['no', 'yes'], default: 'no', showIf: { param: 'distribute', in: ['by-order', 'spread'] } },
+    { name: 'seed', kind: 'number', default: 0, min: 0, max: 9999, step: 1, showIf: { param: 'order', in: ['random'] } },
+    // binds: a list of {channel, target, amount} rows — each binds one slot
+    // signal (weight, progress, or a named channel a Weight node wrote) to one
+    // element property, so several independent signals can drive one Place.
+    // The editor renders the rows with an "add channel" button.
+    { name: 'binds', kind: 'binds', default: '[]' },
   ],
   cook(inputs, params) {
     const elements = asElements(inputs.elements as Value);
     const layoutValue = inputs.layout as LayoutValue;
-    const layout = layoutValue.placements;
-    const amount = Number(params.bindAmount);
-    const seed = Number(params.seed);
-    if (elements.length === 0 || layout.length === 0) {
+    if (elements.length === 0 || layoutValue.placements.length === 0) {
       return { out: { kind: 'elements', items: [] } satisfies ElementsValue };
     }
 
-    // spread mode resamples the layout into exactly one slot per element, evenly
-    // along the path — so changing the element count re-spaces everything.
-    const spread =
-      params.distribute === 'spread'
-        ? spreadAlongPath(layout, layoutValue.closed ?? false, elements.length)
-        : null;
-
-    // The element lane decides how many: one output item per element. cycle/
-    // by-index/shuffle snap to existing slots — extra placements (e.g. unused
-    // grid cells) stay empty; if elements outnumber placements they wrap.
-    const slotFor = (e: Element, i: number): Placement => {
-      if (spread) return spread[i];
-      if (params.distribute === 'by-index') {
-        return layout.find((p) => p.index === e.index) ?? layout[i % layout.length];
-      }
-      if (params.distribute === 'shuffle') {
-        return layout[Math.floor(latticeHash(i, 31, seed) * layout.length)];
-      }
-      return layout[i % layout.length];
+    // a bind's signal, channels-first: an authored channel (named after its
+    // Weight source) shadows a built-in of the same name; unknown names read
+    // as neutral 1, so a dangling bind bends nothing instead of breaking
+    const signal = (p: Placement, channel: string): number => {
+      const name = channel.trim();
+      return p.channels?.[name]
+        ?? (name === 'weight' ? p.weight : name === 'progress' ? p.progress : 1);
     };
+    const binds = parseBinds(params.binds);
 
-    const items: Element[] = elements.map((e, i) => {
-      const p = slotFor(e, i);
+    // sequence the slots — a view over the layout; slot identity is untouched
+    let slots = [...layoutValue.placements];
+    const key: ((p: Placement) => number) | null =
+      params.order === 'x' ? (p) => p.x
+      : params.order === 'y' ? (p) => p.y
+      : params.order === 'progress' ? (p) => p.progress
+      : params.order === 'weight' ? (p) => p.weight
+      : null;
+    if (key) slots.sort((a, b) => key(a) - key(b));
+    if (params.order === 'random') {
+      const seed = Number(params.seed);
+      for (let i = slots.length - 1; i > 0; i--) {
+        const j = Math.floor(latticeHash(i, 31, seed) * (i + 1));
+        [slots[i], slots[j]] = [slots[j], slots[i]];
+      }
+    }
+    if (params.reverse === 'yes') slots.reverse();
+
+    // spread resamples the (ordered) slot run into exactly one slot per
+    // element, evenly by arc length — the element count drives the spacing.
+    if (params.distribute === 'spread') {
+      slots = spreadAlongPath(slots, layoutValue.closed ?? false, elements.length);
+    }
+
+    const byIndex = params.distribute === 'by-index'
+      ? new Map(layoutValue.placements.map((p) => [p.index, p]))
+      : null;
+
+    const offsetX = Number(params.offsetX ?? 0);
+    const offsetY = Number(params.offsetY ?? 0);
+    const items: Element[] = [];
+    elements.forEach((e, i) => {
+      // keyed join: no slot with this identity → the element sits out
+      const p = byIndex ? byIndex.get(e.index) : slots[i % slots.length];
+      if (!p) return;
       let scale = e.transform.scale * p.scale;
       let rotation = e.transform.rotation + p.rotation;
-      if (params.bindWeight === 'scale') scale *= 1 - amount * (1 - p.weight);
-      if (params.bindWeight === 'rotation') rotation += amount * (p.weight - 0.5) * Math.PI;
-      return {
+      let blur = 0;
+      for (const b of binds) {
+        let s = signal(p, b.channel);
+        if (b.invert) s = 1 - s;
+        s += b.offset ?? 0;
+        if (b.target === 'scale') scale *= 1 - b.amount * (1 - s);
+        else if (b.target === 'rotation') rotation += b.amount * (s - 0.5) * Math.PI;
+        else if (b.target === 'blur') blur += s * b.amount; // amount = px at signal 1
+      }
+      items.push({
         content: e.content,
         // the placement replaces the element's position; rotation/scale compose
-        transform: { x: p.x, y: p.y, rotation, scale },
+        transform: { x: p.x + offsetX, y: p.y + offsetY, rotation, scale },
         index: e.index,
-        weight: p.weight,
-      };
+        progress: p.progress, // position is a property of where you landed
+        weight: e.weight * p.weight, // density composes; 1 is the identity
+        ...(blur > 0 ? { blur } : {}),
+      });
     });
 
     const value: ElementsValue = { kind: 'elements', items };
@@ -238,6 +342,8 @@ export const FlattenNode: NodeDef = {
   cook(inputs, _params, ctx) {
     const elements = (inputs.in as ElementsValue).items;
     const paths: PathCmd[][] = [];
+    // Flatten collapses to one vector, one style — the first styled content wins
+    let style: Style | undefined;
     for (const el of elements) {
       let content: PathCmd[][];
       if (el.content.kind === 'vector') {
@@ -250,9 +356,10 @@ export const FlattenNode: NodeDef = {
       } else {
         throw new Error('Flatten: raster element content is not supported yet — Trace it first');
       }
+      style ??= el.content.style;
       paths.push(...transformPaths(content, el.transform));
     }
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style };
     return { out: value };
   },
 };

@@ -8,6 +8,7 @@ import { socketTypes, type ParamSpec, type SocketSpec } from '../engine/registry
 import type { ParamValue } from '../engine/graph';
 import type { SocketType } from '../engine/values';
 import { registry } from '../nodes';
+import { BIND_TARGETS, parseBinds, type BindSpec } from '../nodes/elements';
 import { localFontsSupported, useApp } from '../store';
 
 // Type ladder colors — a bright 2000s computer palette, one unique hue per type,
@@ -122,6 +123,9 @@ function NodeParam({
       </label>
     );
   }
+  if (spec.kind === 'binds') {
+    return <BindList value={String(value)} onChange={onChange} />;
+  }
   if (spec.kind === 'image') {
     return (
       <label className="param">
@@ -146,6 +150,14 @@ function NodeParam({
       </label>
     );
   }
+  if (spec.kind === 'toggle') {
+    return (
+      <label className="param">
+        <span>{spec.name}</span>
+        <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
+      </label>
+    );
+  }
   if (spec.kind === 'select') {
     return (
       <label className="param">
@@ -163,6 +175,96 @@ function NodeParam({
       <span>{spec.name}</span>
       <input type="text" value={String(value)} onChange={(e) => onChange(e.target.value)} />
     </label>
+  );
+}
+
+// Place's channel bindings: one row per bind (channel → target, amount, plus
+// offset/invert to shape the signal), and an "add channel" button that appends
+// a row. Rows live in one JSON param; parseBinds is shared with the cook so
+// both sides read it alike.
+function BindList({ value, onChange }: { value: string; onChange: (v: ParamValue) => void }) {
+  const nodes = useApp((s) => s.graph.nodes);
+  const binds = parseBinds(value);
+  const set = (next: BindSpec[]) => onChange(JSON.stringify(next));
+  const patch = (i: number, part: Partial<BindSpec>) =>
+    set(binds.map((b, k) => (k === i ? { ...b, ...part } : b)));
+
+  // what a row can read: the built-ins + whatever this document's Weights
+  // write — channels are named after their Weight node's source
+  const channels = ['weight', 'progress'];
+  for (const n of Object.values(nodes)) {
+    if (n.type !== 'Weight') continue;
+    const t = String(n.params.source ?? 'noise').trim();
+    if (t && !channels.includes(t)) channels.push(t);
+  }
+
+  // amounts mean different things per target: strength (0..1) vs blur px
+  const amountSpec = (target: BindSpec['target']): NumberSpec =>
+    target === 'blur'
+      ? { name: 'amount', kind: 'number', default: 8, min: 0, max: 64, step: 1 }
+      : { name: 'amount', kind: 'number', default: 1, min: 0, max: 1, step: 0.01 };
+
+  return (
+    <div className="bind-list">
+      {binds.map((b, i) => (
+        <div key={i} className="bind-item">
+          <div className="bind-item-head">
+            <span>bind {i + 1}</span>
+            <button type="button" className="num-arrow" title="remove binding" onClick={() => set(binds.filter((_, k) => k !== i))}>
+              ×
+            </button>
+          </div>
+          <label className="param">
+            <span>channel</span>
+            <select value={b.channel} onChange={(e) => patch(i, { channel: e.target.value })}>
+              {(channels.includes(b.channel) ? channels : [...channels, b.channel]).map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="param">
+            <span>target</span>
+            <select
+              value={b.target}
+              onChange={(e) => {
+                const target = e.target.value as BindSpec['target'];
+                patch(i, { target, amount: target === 'blur' ? 8 : 1 });
+              }}
+            >
+              {BIND_TARGETS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label className="param">
+            <span>amount</span>
+            <NumberDrag spec={amountSpec(b.target)} value={b.amount} onChange={(v) => patch(i, { amount: v })} />
+          </label>
+          <label className="param">
+            <span>offset</span>
+            <NumberDrag
+              spec={{ name: 'offset', kind: 'number', default: 0, min: -1, max: 1, step: 0.01 }}
+              value={b.offset ?? 0}
+              onChange={(v) => patch(i, { offset: v })}
+            />
+          </label>
+          <label className="param">
+            <span>invert</span>
+            <select value={b.invert ? 'yes' : 'no'} onChange={(e) => patch(i, { invert: e.target.value === 'yes' })}>
+              <option value="no">no</option>
+              <option value="yes">yes</option>
+            </select>
+          </label>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="bind-add"
+        onClick={() => set([...binds, { channel: 'weight', target: 'scale', amount: 1 }])}
+      >
+        + add channel
+      </button>
+    </div>
   );
 }
 

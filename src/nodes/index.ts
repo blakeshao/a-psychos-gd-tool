@@ -10,7 +10,7 @@ import {
   GridNode,
   RandomLayoutNode,
   SamplePathNode,
-  SortLayoutNode,
+  WeightNode,
 } from './layout';
 import { NoiseNode } from './noise';
 import { OutlineNode } from './outline';
@@ -51,7 +51,7 @@ export const PALETTE: NodeCategory[] = [
   { category: 'Raster ops', nodes: [BlurNode, DitherNode, AsciiNode, RecolorNode, ChromaKeyNode] },
   {
     category: 'Layout',
-    nodes: [GridNode, SamplePathNode, FunctionLayoutNode, RandomLayoutNode, FilterLayoutNode, SortLayoutNode],
+    nodes: [GridNode, SamplePathNode, FunctionLayoutNode, RandomLayoutNode, WeightNode, FilterLayoutNode],
   },
   { category: 'Placement', nodes: [DuplicatorNode, PlaceNode] },
   // Flatten is Conversion's elements => vector step down the type ladder.
