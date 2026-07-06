@@ -35,6 +35,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 // uniform struct @N+1 (omitted when the shader takes no uniforms).
 
 // Separable gaussian: run twice, dir=(1,0) then dir=(0,1), ping-ponging targets.
+// Accumulates premultiplied (transparent-black ground must not darken edges)
+// and in linear light (averaging gamma-encoded bytes biases soft edges dark).
+// Taps run out to 3 sigma so the halo fades to nothing instead of stepping
+// off at the kernel cut — a 2-sigma cut leaves ~13% weight, a visible rim.
 export const BLUR_FS = /* wgsl */ `
 struct BlurU {
   dir: vec2f,
@@ -45,22 +49,33 @@ struct BlurU {
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> u: BlurU;
 
+fn srgb2lin(c: vec3f) -> vec3f { return pow(max(c, vec3f(0.0)), vec3f(2.2)); }
+fn lin2srgb(c: vec3f) -> vec3f { return pow(max(c, vec3f(0.0)), vec3f(1.0 / 2.2)); }
+
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   let texel = 1.0 / vec2f(textureDimensions(tex));
-  let r = i32(u.radius);
-  if (r <= 0) {
+  if (u.radius <= 0.0) {
     return textureSample(tex, samp, in.uv);
   }
-  let sigma = max(f32(r) * 0.5, 1.0);
+  let sigma = max(u.radius * 0.5, 1.0);
+  let reach = ceil(sigma * 3.0);
+  // radius is uncapped, taps are not: past 64 per side, widen the stride
+  // instead of the loop. Strides stay whole texels — bilinear between texels
+  // would re-mix transparent black into edges (straight-alpha filtering).
+  let stride = max(1.0, ceil(reach / 64.0));
+  let taps = i32(reach / stride);
   var sum = vec4f(0.0);
   var wsum = 0.0;
-  for (var i = -r; i <= r; i++) {
-    let w = exp(-f32(i * i) / (2.0 * sigma * sigma));
-    sum += textureSample(tex, samp, in.uv + f32(i) * u.dir * texel) * w;
+  for (var i = -taps; i <= taps; i++) {
+    let o = f32(i) * stride;
+    let w = exp(-(o * o) / (2.0 * sigma * sigma));
+    let c = textureSample(tex, samp, in.uv + o * u.dir * texel);
+    sum += vec4f(srgb2lin(c.rgb) * c.a, c.a) * w;
     wsum += w;
   }
-  return sum / wsum;
+  let p = sum / wsum;
+  return vec4f(lin2srgb(p.rgb / max(p.a, 1e-5)), p.a);
 }
 `;
 
@@ -195,9 +210,21 @@ fn vs(@builtin(vertex_index) i: u32) -> QVSOut {
   return out;
 }
 
+// exact sRGB EOTF — must invert the hardware encode so opaque pixels
+// round-trip byte-identical through the composite
+fn qsrgb2lin(c: vec3f) -> vec3f {
+  let lo = c / 12.92;
+  let hi = pow((c + vec3f(0.055)) / 1.055, vec3f(2.4));
+  return select(hi, lo, c <= vec3f(0.04045));
+}
+
 @fragment
 fn fs(in: QVSOut) -> @location(0) vec4f {
-  return textureSample(tex, samp, in.uv);
+  let c = textureSample(tex, samp, in.uv);
+  // the target view is sRGB: emit linear, the hardware re-encodes on store.
+  // src-over then blends in linear light — blending gamma bytes darkens
+  // every soft edge (blur halos, antialiasing) against the paper.
+  return vec4f(qsrgb2lin(c.rgb), c.a);
 }
 `;
 

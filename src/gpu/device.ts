@@ -132,7 +132,12 @@ export class GpuContext {
    * local_px spanning the content size (w, h).
    */
   drawQuad(src: TexSource, dst: PooledTexture, coeffs: Float32Array<ArrayBuffer>) {
-    const key = `quad:${dst.format}`;
+    // render through the sRGB view: dst bytes stay sRGB-encoded, but the
+    // fixed-function blend decodes to linear light around the src-over —
+    // blending gamma bytes puts a dark rim on soft edges (blur, AA)
+    const viewFormat: GPUTextureFormat =
+      dst.format === 'rgba8unorm' ? 'rgba8unorm-srgb' : dst.format;
+    const key = `quad:${viewFormat}`;
     let pipeline = this.pipelines.get(key);
     if (!pipeline) {
       const module = this.device.createShaderModule({ code: QUAD_SHADER });
@@ -143,7 +148,7 @@ export class GpuContext {
           module,
           entryPoint: 'fs',
           targets: [{
-            format: dst.format,
+            format: viewFormat,
             blend: {
               color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
               alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -168,7 +173,9 @@ export class GpuContext {
     });
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
-      colorAttachments: [{ view: dst.texture.createView(), loadOp: 'load', storeOp: 'store' }],
+      colorAttachments: [
+        { view: dst.texture.createView({ format: viewFormat }), loadOp: 'load', storeOp: 'store' },
+      ],
     });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
@@ -178,8 +185,9 @@ export class GpuContext {
   }
 
   /**
-   * GPU -> CPU readback. The one expensive direction — only Trace and PNG
-   * export should ever call this; everything else stays on the GPU.
+   * GPU -> CPU readback. The one expensive direction — only Trace, Weight's
+   * image sampling, and PNG export should ever call this; everything else
+   * stays on the GPU.
    */
   async readback(t: PooledTexture): Promise<ImageData> {
     const bytesPerRow = Math.ceil((t.width * 4) / 256) * 256; // copy alignment rule

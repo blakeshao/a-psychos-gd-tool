@@ -30,7 +30,7 @@ export const DisplaceNode: NodeDef = {
       }
     }
     const paths = polylinesToPaths(polys);
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style: src.style };
     return { out: value };
   },
 };
@@ -60,7 +60,7 @@ export const WarpNode: NodeDef = {
       }
     }
     const paths = polylinesToPaths(polys);
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style: src.style };
     return { out: value };
   },
 };

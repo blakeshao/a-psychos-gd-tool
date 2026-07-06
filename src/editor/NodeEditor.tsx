@@ -110,7 +110,7 @@ export function NodeEditor() {
   const addNode = (type: string) => {
     // drop new nodes in a loose cascade so they don't stack exactly
     const count = Object.keys(useApp.getState().graph.nodes).length;
-    useApp.getState().addNode(type, { x: 80 + (count % 6) * 60, y: 260 + (count % 4) * 40 });
+    useApp.getState().addNode(type, { x: 80 + (count % 6) * 96, y: 260 + (count % 4) * 48 });
   };
 
   return (

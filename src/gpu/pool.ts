@@ -46,6 +46,8 @@ export class TexturePool {
         size: { width, height },
         format,
         usage: usage(),
+        // the -srgb alias lets composite passes blend in linear light
+        viewFormats: format === 'rgba8unorm' ? ['rgba8unorm-srgb'] : [],
       }),
       width,
       height,

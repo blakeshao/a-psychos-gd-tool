@@ -3,7 +3,7 @@
 
 import { boundsOfPaths } from '../engine/path';
 import type { NodeDef } from '../engine/registry';
-import type { PathCmd, VectorValue } from '../engine/values';
+import type { PathCmd, StrokeAlign, Style, VectorValue } from '../engine/values';
 
 const KAPPA = 0.5522847498; // cubic approximation of a quarter arc
 
@@ -16,6 +16,11 @@ export const ShapeNode: NodeDef = {
     { name: 'width', kind: 'number', default: 300, min: 1, max: 2000, step: 1 },
     { name: 'height', kind: 'number', default: 300, min: 1, max: 2000, step: 1 },
     { name: 'sides', kind: 'number', default: 6, min: 3, max: 24, step: 1 },
+    { name: 'fill', kind: 'color', default: '#000000' },
+    { name: 'stroke', kind: 'toggle', default: false },
+    { name: 'strokeColor', kind: 'color', default: '#000000', showIf: { param: 'stroke', in: ['true'] } },
+    { name: 'strokeWidth', kind: 'number', default: 4, min: 0, max: 100, step: 0.5, showIf: { param: 'stroke', in: ['true'] } },
+    { name: 'strokeAlign', kind: 'select', options: ['center', 'inside', 'outside'], default: 'center', showIf: { param: 'stroke', in: ['true'] } },
   ],
   cook(_inputs, params) {
     const w = Number(params.width) / 2;
@@ -54,8 +59,16 @@ export const ShapeNode: NodeDef = {
         ];
       }
     }
+    const style: Style = {
+      fill: String(params.fill ?? '#000000'),
+      stroke: String(params.strokeColor ?? '#000000'),
+      // the toggle folds into the width — 0 reads as "off" everywhere
+      strokeWidth: params.stroke === true ? Number(params.strokeWidth ?? 4) : 0,
+      strokeAlign: String(params.strokeAlign ?? 'center') as StrokeAlign,
+      grow: 0,
+    };
     const paths = [cmds];
-    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths) };
+    const value: VectorValue = { kind: 'vector', paths, bounds: boundsOfPaths(paths), style };
     return { out: value };
   },
 };

@@ -1,12 +1,25 @@
 // The Phase 3 raster ops. Every one is the same shape: acquire a target,
 // run one shader pass over the upstream texture(s), return a new handle.
 
-import type { NodeDef } from '../engine/registry';
-import type { AlphaValue, RasterValue } from '../engine/values';
+import type { CookContext, NodeDef } from '../engine/registry';
+import type { AlphaValue, ElementsValue, RasterValue } from '../engine/values';
+import { renderElements } from '../gpu/elementRenderer';
 import { hexToRgb } from '../util/color';
 
 function requireGpu(ctx: { gpu: unknown }) {
   if (!ctx.gpu) throw new Error('raster ops need a GPU context');
+}
+
+/**
+ * Elements lift to ink on transparent ground at frame resolution — the same
+ * compositing path as Output, minus the paper. `lifted` marks textures created
+ * here (not owned by an upstream cache entry) so the caller releases them.
+ */
+function liftToRaster(v: RasterValue | ElementsValue, ctx: CookContext): { value: RasterValue; lifted: boolean } {
+  if (v.kind === 'raster') return { value: v, lifted: false };
+  const { width, height } = ctx.frame;
+  const texture = renderElements(ctx.gpu!, ctx.fonts, v.items, width, height, { r: 0, g: 0, b: 0, a: 0 });
+  return { value: { kind: 'raster', texture, width, height }, lifted: true };
 }
 
 export const DitherNode: NodeDef = {
@@ -108,8 +121,8 @@ const COMPOSITE_MODES = ['normal', 'multiply', 'screen', 'overlay'];
 export const CompositeNode: NodeDef = {
   type: 'Composite',
   inputs: [
-    { name: 'base', type: 'raster' },
-    { name: 'overlay', type: 'raster' },
+    { name: 'base', type: ['raster', 'elements'] },
+    { name: 'overlay', type: ['raster', 'elements'] },
     { name: 'mask', type: 'alpha', optional: true },
   ],
   outputs: [{ name: 'out', type: 'raster' }],
@@ -117,18 +130,21 @@ export const CompositeNode: NodeDef = {
     { name: 'mode', kind: 'select', options: COMPOSITE_MODES, default: 'normal' },
     { name: 'opacity', kind: 'number', default: 1, min: 0, max: 1, step: 0.01 },
   ],
+  usesFrame: true,
   cook(inputs, params, ctx) {
     requireGpu(ctx);
-    const base = inputs.base as RasterValue;
-    const overlay = inputs.overlay as RasterValue;
+    const base = liftToRaster(inputs.base as RasterValue | ElementsValue, ctx);
+    const overlay = liftToRaster(inputs.overlay as RasterValue | ElementsValue, ctx);
     const mask = inputs.mask as AlphaValue | undefined;
-    const dst = ctx.gpu!.pool.acquire(base.width, base.height);
+    const dst = ctx.gpu!.pool.acquire(base.value.width, base.value.height);
     ctx.gpu!.runPass(
       'composite',
-      [base.texture, overlay.texture, mask ? mask.texture : ctx.gpu!.white()],
+      [base.value.texture, overlay.value.texture, mask ? mask.texture : ctx.gpu!.white()],
       dst,
       new Float32Array([Math.max(0, COMPOSITE_MODES.indexOf(String(params.mode))), Number(params.opacity), 0, 0]),
     );
-    return { out: { kind: 'raster', texture: dst, width: base.width, height: base.height } satisfies RasterValue };
+    if (base.lifted) ctx.gpu!.pool.release(base.value.texture);
+    if (overlay.lifted) ctx.gpu!.pool.release(overlay.value.texture);
+    return { out: { kind: 'raster', texture: dst, width: base.value.width, height: base.value.height } satisfies RasterValue };
   },
 };

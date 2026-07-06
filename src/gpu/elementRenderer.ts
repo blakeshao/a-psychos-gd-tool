@@ -5,7 +5,7 @@
 
 import type { Font } from 'opentype.js';
 import type { Element, PathCmd } from '../engine/values';
-import { appendPath } from '../nodes/rasterize';
+import { appendPath, paintPath } from './paint';
 import type { GpuContext } from './device';
 import type { PooledTexture } from './pool';
 
@@ -60,6 +60,10 @@ export function renderElements(
       continue;
     }
 
+    // an eroding draw (grow < 0) erases through everything under it on the
+    // shared layer — give it a fresh one and flush it out right after
+    const erodes = (el.content.style?.grow ?? 0) < 0;
+    if (erodes) flush();
     if (!canvas) {
       canvas = new OffscreenCanvas(width, height);
       c2d = canvas.getContext('2d')!;
@@ -79,8 +83,12 @@ export function renderElements(
         appendPath(p, font.glyphs.get(g.glyphId).getPath(g.x, g.y, el.content.fontSize).commands as PathCmd[]);
       }
     }
-    c2d!.fillStyle = '#000000';
-    c2d!.fill(p);
+    // per-element blur (Place's blur bind) — canvas filters apply per draw op.
+    // raster elements skip it for now (they bypass the canvas layer entirely).
+    c2d!.filter = el.blur && el.blur > 0 ? `blur(${el.blur}px)` : 'none';
+    paintPath(c2d!, p, el.content.style);
+    c2d!.filter = 'none';
+    if (erodes) flush();
   }
   flush();
   return dst;

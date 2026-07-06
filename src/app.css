@@ -199,7 +199,7 @@ body {
 
 .gfx-node {
   background: var(--panel-solid); border: 1px solid var(--border); border-radius: 0;
-  width: 130px; font-size: 10px; color: var(--text);
+  width: 210px; font-size: 10px; color: var(--text);
 }
 .react-flow__node.selected .gfx-node { border-color: var(--border-strong); }
 .gfx-title {
@@ -225,7 +225,7 @@ body {
 }
 .gfx-params .param { margin-bottom: 0; gap: 5px; min-width: 0; }
 .gfx-params .param > span:first-child {
-  width: 32px; font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis;
+  width: 64px; font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis;
 }
 .gfx-params input, .gfx-params select { font-size: 9px; padding: 2px 4px; }
 .gfx-params input[type='color'] { height: 16px; }
@@ -304,3 +304,20 @@ input.num-field:focus { outline: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Place's channel bindings: each bind is a stacked group — channel / target /
+   amount each on their own labelled row (reusing .param), boxed with a header
+   holding the remove button. The add-channel button appends a group. */
+.bind-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.bind-item { border: 1px solid var(--border); padding: 6px; }
+.bind-item-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 4px; color: var(--muted);
+}
+.bind-item .param { margin-bottom: 4px; }
+.bind-item .param:last-child { margin-bottom: 0; }
+.bind-add {
+  align-self: flex-start; background: var(--panel-solid); border: 1px solid var(--border);
+  color: var(--text); cursor: pointer; padding: 2px 6px; font: inherit; font-size: 9px;
+}
+.bind-add:hover { background: var(--panel-3); }

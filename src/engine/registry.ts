@@ -31,8 +31,12 @@ export type ParamSpec = ParamVisibility &
     | { name: string; kind: 'string'; default: string }
     | { name: string; kind: 'number'; default: number; min?: number; max?: number; step?: number }
     | { name: string; kind: 'color'; default: string } // '#rrggbb'
+    | { name: string; kind: 'toggle'; default: boolean }
     | { name: string; kind: 'select'; options: string[]; default: string }
     | { name: string; kind: 'image'; default: string } // a data: URI — travels with the doc
+    // a JSON-encoded list of channel bindings ({channel, target, amount}[]) —
+    // the editor renders rows plus an "add channel" button; cooks parse it
+    | { name: string; kind: 'binds'; default: string }
   );
 
 export interface CookContext {
