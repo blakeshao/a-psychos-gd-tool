@@ -32,6 +32,7 @@ body {
 
 /* title sits atop the node palette in the editor */
 .editor-title {
+  display: flex; align-items: center; gap: 8px;
   font-size: 14px; font-weight: 700; margin-bottom: 8px;
   text-transform: uppercase; letter-spacing: 0.06em;
 }
@@ -72,6 +73,9 @@ body {
 }
 .export-btn:hover { background: var(--panel-3); border-color: var(--border-strong); }
 .export-btn:disabled { color: var(--muted); cursor: default; }
+
+.github-link { display: flex; align-items: center; color: var(--muted); }
+.github-link:hover { color: var(--text); }
 
 .node-id { color: var(--muted-2); font-weight: normal; }
 

@@ -1,4 +1,6 @@
-# nodegfx
+# a-psychos-gd-tool
+
+**Hosted version:** [a-psychos-gd-tool.vercel.app](https://a-psychos-gd-tool.vercel.app/) — needs a WebGPU browser (Chrome/Edge 113+ or Safari 18+).
 
 A node-based graphic design tool that runs in the browser, on the GPU. You build a poster by wiring nodes on a canvas: text is shaped into vector outlines, vectors are warped and combined, rasters are blurred and dithered — every conversion is an explicit node on a typed wire, never a hidden coercion. The engine only re-computes what a change actually touches, so dragging a parameter stays interactive even in deep graphs.
 

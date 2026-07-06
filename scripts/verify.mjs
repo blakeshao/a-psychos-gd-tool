@@ -45,6 +45,6 @@ const err = await page.$('.cook-error');
 if (err) console.log('COOK ERROR:', await err.evaluate((el) => el.textContent));
 console.log('---', await page.$eval('.pool', (el) => el.textContent));
 
-await page.screenshot({ path: '/tmp/nodegfx-frame.png' });
-console.log('screenshot: /tmp/nodegfx-frame.png');
+await page.screenshot({ path: '/tmp/a-psychos-gd-tool-frame.png' });
+console.log('screenshot: /tmp/a-psychos-gd-tool-frame.png');
 await browser.close();
