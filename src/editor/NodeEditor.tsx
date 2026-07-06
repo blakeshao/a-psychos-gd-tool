@@ -134,7 +134,7 @@ export function NodeEditor() {
           a-psychos-gd-tool
           <a
             className="github-link"
-            href="https://github.com/blakeshao/a-psycho-s-gd"
+            href="https://github.com/blakeshao/a-psychos-gd-tool"
             target="_blank"
             rel="noreferrer"
             title="view source on GitHub"
