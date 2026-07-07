@@ -37,9 +37,10 @@ body {
   text-transform: uppercase; letter-spacing: 0.06em;
 }
 
-/* w/h frame config above the rendered image */
+/* w/h frame config above the rendered image; wraps instead of overflowing
+   when the viewport pane is narrow */
 .frame-config {
-  display: flex; gap: 12px; justify-content: center; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: center; align-items: center;
   padding: 8px; border-bottom: 1px solid var(--border);
   background: var(--panel);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
@@ -69,7 +70,7 @@ body {
 .export-btn {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 0; padding: 3px 10px; font: inherit; cursor: pointer; line-height: 1;
-  text-transform: uppercase; letter-spacing: 0.06em;
+  text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
 }
 .export-btn:hover { background: var(--panel-3); border-color: var(--border-strong); }
 .export-btn:disabled { color: var(--muted); cursor: default; }
