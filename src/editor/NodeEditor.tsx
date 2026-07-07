@@ -2,7 +2,7 @@
 // wire, delete) flows back through store actions. wireIsValid gives live
 // red/green feedback while dragging a connection.
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   Background,
   Panel,
@@ -105,6 +105,21 @@ export function NodeEditor() {
       target: conn.target,
       targetHandle: conn.targetHandle,
     });
+  }, []);
+
+  // Cmd/Ctrl+Z undoes, +Shift redoes — skipped while a text field has focus so
+  // the browser's own undo keeps working inside param inputs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      if (e.shiftKey) useApp.getState().redo();
+      else useApp.getState().undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const addNode = (type: string) => {

@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Graph } from './engine/graph';
-import { useApp, wireIsValid } from './store';
+import { endGesture, useApp, wireIsValid } from './store';
 
 function chain(): Graph {
   return {
@@ -86,5 +86,67 @@ describe('store actions', () => {
     const g = useApp.getState().graph;
     const added = Object.values(g.nodes).find((n) => n.type === 'Blur' && n.id !== 'blur1')!;
     expect(added.params.radius).toBe(8);
+  });
+});
+
+describe('undo/redo', () => {
+  beforeEach(() => {
+    useApp.setState({ graph: chain(), selectedNodeId: null, past: [], future: [] });
+    endGesture();
+  });
+
+  it('undo restores a removed node and its wires; redo removes it again', () => {
+    useApp.getState().removeNodes(['blur1']);
+    useApp.getState().undo();
+    let g = useApp.getState().graph;
+    expect(g.nodes.blur1).toBeDefined();
+    expect(g.edges.filter((e) => e.from.node === 'blur1' || e.to.node === 'blur1')).toHaveLength(2);
+    useApp.getState().redo();
+    g = useApp.getState().graph;
+    expect(g.nodes.blur1).toBeUndefined();
+  });
+
+  it('a new edit clears the redo stack', () => {
+    useApp.getState().removeNodes(['blur1']);
+    useApp.getState().undo();
+    useApp.getState().addNode('Blur', { x: 0, y: 0 });
+    expect(useApp.getState().future).toHaveLength(0);
+  });
+
+  it('a param scrub coalesces into one undo step, split at gesture boundaries', () => {
+    useApp.getState().setParam('blur1', 'radius', 1);
+    useApp.getState().setParam('blur1', 'radius', 2);
+    useApp.getState().setParam('blur1', 'radius', 3);
+    endGesture(); // pointer-up
+    useApp.getState().setParam('blur1', 'radius', 9);
+    expect(useApp.getState().past).toHaveLength(2);
+    useApp.getState().undo();
+    expect(useApp.getState().graph.nodes.blur1.params.radius).toBe(3);
+    useApp.getState().undo();
+    expect(useApp.getState().graph.nodes.blur1.params.radius).toBeUndefined();
+  });
+
+  it('edits to different params do not coalesce', () => {
+    useApp.getState().setParam('blur1', 'radius', 1);
+    useApp.getState().setParam('text1', 'content', 'A');
+    expect(useApp.getState().past).toHaveLength(2);
+  });
+
+  it('an invalid connect leaves no history entry', () => {
+    useApp.getState().connect({ source: 'text1', sourceHandle: 'out', target: 'blur1', targetHandle: 'in' });
+    expect(useApp.getState().past).toHaveLength(0);
+  });
+
+  it('undo with an empty stack is a no-op', () => {
+    const before = useApp.getState().graph;
+    useApp.getState().undo();
+    expect(useApp.getState().graph).toBe(before);
+  });
+
+  it('the selection is dropped when the selected node vanishes on undo', () => {
+    useApp.getState().addNode('Blur', { x: 0, y: 0 });
+    expect(useApp.getState().selectedNodeId).not.toBeNull();
+    useApp.getState().undo();
+    expect(useApp.getState().selectedNodeId).toBeNull();
   });
 });

@@ -4,7 +4,7 @@
 
 A node-based graphic design tool that runs in the browser, on the GPU. You build a poster by wiring nodes on a canvas: text is shaped into vector outlines, vectors are warped and combined, rasters are blurred and dithered — every conversion is an explicit node on a typed wire, never a hidden coercion. The engine only re-computes what a change actually touches, so dragging a parameter stays interactive even in deep graphs.
 
-**Status:** experimental, under active development. 31 node types; persistence, redo, and undo are not built yet (see [Roadmap](#roadmap)).
+**Status:** experimental, under active development. 31 node types; undo/redo is built in (⌘/Ctrl Z, ⇧⌘/Ctrl Z); persistence is not built yet (see [Roadmap](#roadmap)).
 
 ## Requirements
 
@@ -124,7 +124,7 @@ Both default to `http://localhost:5199/` (pass your dev server's URL) and locate
 4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ (vector Slice deferred)
 5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (Alpha Map deferred)
 6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)
-7. Persistence, export, undo
+7. Persistence, export, ~~undo~~
 
 ## Contributing
 
