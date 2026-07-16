@@ -154,9 +154,29 @@ export function wireIsValid(graph: Graph, w: WireSpec): boolean {
   return !hasPath(graph, w.target, w.source); // no cycles
 }
 
+// Undo history: whole-graph snapshots. Graph edits are immutable updates that
+// share structure, so a snapshot is one object reference — cheap to keep.
+// Continuous edits (a param scrub, a node drag, typing in a field) coalesce
+// into one undo step: repeats of the same edit key inside the window ride on
+// the snapshot already pushed.
+const HISTORY_LIMIT = 100;
+const COALESCE_MS = 1000;
+let lastEdit: { key: string; time: number } | null = null;
+
+/** Close the current coalescing run — the next edit starts a fresh undo step.
+ * Called on gesture boundaries (pointer-up on a number scrub). */
+export function endGesture(): void {
+  lastEdit = null;
+}
+
 interface AppStore {
   graph: Graph;
   selectedNodeId: NodeId | null;
+  /** undo/redo stacks of graph snapshots — selection and fonts stay out of history */
+  past: Graph[];
+  future: Graph[];
+  undo: () => void;
+  redo: () => void;
   /** parsed fonts ready to cook, keyed by font key ('default' + local families) */
   fonts: Record<string, Font>;
   /** family names of the user's local fonts, available to load on demand */
@@ -178,16 +198,58 @@ interface AppStore {
 
 let nextId = 1;
 
+/** The history push that precedes a graph edit. A `key` marks the edit as
+ * continuous: repeats inside the coalescing window reuse the snapshot already
+ * pushed. Discrete edits pass null and always snapshot. */
+function pushHistory(s: AppStore, key: string | null): Pick<AppStore, 'past' | 'future'> | undefined {
+  const now = Date.now();
+  if (key && lastEdit && lastEdit.key === key && now - lastEdit.time < COALESCE_MS) {
+    lastEdit.time = now;
+    return undefined;
+  }
+  lastEdit = key ? { key, time: now } : null;
+  return { past: [...s.past.slice(1 - HISTORY_LIMIT), s.graph], future: [] };
+}
+
 export const useApp = create<AppStore>((set, get) => ({
   graph: initialGraph,
   selectedNodeId: null,
+  past: [],
+  future: [],
   fonts: {},
   localFonts: [],
 
   select: (id) => set({ selectedNodeId: id }),
 
+  undo: () =>
+    set((s) => {
+      const prev = s.past[s.past.length - 1];
+      if (!prev) return s;
+      endGesture();
+      return {
+        past: s.past.slice(0, -1),
+        future: [...s.future, s.graph],
+        graph: prev,
+        selectedNodeId: s.selectedNodeId && prev.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+      };
+    }),
+
+  redo: () =>
+    set((s) => {
+      const next = s.future[s.future.length - 1];
+      if (!next) return s;
+      endGesture();
+      return {
+        future: s.future.slice(0, -1),
+        past: [...s.past, s.graph],
+        graph: next,
+        selectedNodeId: s.selectedNodeId && next.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+      };
+    }),
+
   setFrame: (frame) =>
     set((s) => ({
+      ...pushHistory(s, 'frame'),
       graph: {
         ...s.graph,
         frame: {
@@ -199,6 +261,7 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setParam: (nodeId, name, value) =>
     set((s) => ({
+      ...pushHistory(s, `param:${nodeId}:${name}`),
       graph: {
         ...s.graph,
         nodes: {
@@ -210,6 +273,7 @@ export const useApp = create<AppStore>((set, get) => ({
 
   moveNode: (nodeId, position) =>
     set((s) => ({
+      ...pushHistory(s, `move:${nodeId}`),
       graph: { ...s.graph, nodes: { ...s.graph.nodes, [nodeId]: { ...s.graph.nodes[nodeId], position } } },
     })),
 
@@ -221,6 +285,7 @@ export const useApp = create<AppStore>((set, get) => ({
       while (s.graph.nodes[id]) id = `${type.toLowerCase()}_${nextId++}`;
       const params = Object.fromEntries(def.params.map((p) => [p.name, p.default]));
       return {
+        ...pushHistory(s, null),
         graph: { ...s.graph, nodes: { ...s.graph.nodes, [id]: { id, type, params, position } } },
         selectedNodeId: id,
       };
@@ -232,6 +297,7 @@ export const useApp = create<AppStore>((set, get) => ({
       const nodes = Object.fromEntries(Object.entries(s.graph.nodes).filter(([id]) => !drop.has(id)));
       const edges = s.graph.edges.filter((e) => !drop.has(e.from.node) && !drop.has(e.to.node));
       return {
+        ...pushHistory(s, null),
         graph: { ...s.graph, nodes, edges },
         selectedNodeId: s.selectedNodeId && drop.has(s.selectedNodeId) ? null : s.selectedNodeId,
       };
@@ -248,13 +314,13 @@ export const useApp = create<AppStore>((set, get) => ({
         from: { node: w.source, socket: w.sourceHandle },
         to: { node: w.target, socket: w.targetHandle },
       });
-      return { graph: { ...s.graph, edges } };
+      return { ...pushHistory(s, null), graph: { ...s.graph, edges } };
     }),
 
   removeEdges: (keys) =>
     set((s) => {
       const drop = new Set(keys);
-      return { graph: { ...s.graph, edges: s.graph.edges.filter((e) => !drop.has(edgeKey(e))) } };
+      return { ...pushHistory(s, null), graph: { ...s.graph, edges: s.graph.edges.filter((e) => !drop.has(edgeKey(e))) } };
     }),
 
   addFont: (key, font) => set((s) => ({ fonts: { ...s.fonts, [key]: font } })),

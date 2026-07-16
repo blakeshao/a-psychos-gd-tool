@@ -9,7 +9,7 @@ import type { ParamValue } from '../engine/graph';
 import type { SocketType } from '../engine/values';
 import { registry } from '../nodes';
 import { BIND_TARGETS, parseBinds, type BindSpec } from '../nodes/elements';
-import { localFontsSupported, useApp } from '../store';
+import { endGesture, localFontsSupported, useApp } from '../store';
 
 // Type ladder colors — a bright 2000s computer palette, one unique hue per type,
 // matching the wire colors. Sockets (the circles) and the wires that leave them
@@ -437,6 +437,7 @@ function NumberDrag({
     drag.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     if (d && !d.moved) setEditing(true);
+    else if (d) endGesture(); // the scrub was one undo step; the next is its own
   };
 
   return (
