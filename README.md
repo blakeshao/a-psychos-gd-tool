@@ -124,7 +124,7 @@ Both default to `http://localhost:5199/` (pass your dev server's URL) and locate
 4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ (vector Slice deferred)
 5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (Alpha Map deferred)
 6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)
-7. Persistence, export, ~~undo~~
+7. Persistence, ~export~, ~~undo~~
 
 ## Contributing
 
