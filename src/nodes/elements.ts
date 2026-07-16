@@ -11,16 +11,17 @@
 
 import { boundsOfPaths, transformPaths } from '../engine/path';
 import type { NodeDef } from '../engine/registry';
-import type {
-  Element,
-  ElementsValue,
-  LayoutValue,
-  PathCmd,
-  Placement,
-  Style,
-  TextValue,
-  Value,
-  VectorValue,
+import {
+  readChannel,
+  type Element,
+  type ElementsValue,
+  type LayoutValue,
+  type PathCmd,
+  type Placement,
+  type Style,
+  type TextValue,
+  type Value,
+  type VectorValue,
 } from '../engine/values';
 import { latticeHash } from '../util/noise';
 
@@ -262,14 +263,6 @@ export const PlaceNode: NodeDef = {
       return { out: { kind: 'elements', items: [] } satisfies ElementsValue };
     }
 
-    // a bind's signal, channels-first: an authored channel (named after its
-    // Weight source) shadows a built-in of the same name; unknown names read
-    // as neutral 1, so a dangling bind bends nothing instead of breaking
-    const signal = (p: Placement, channel: string): number => {
-      const name = channel.trim();
-      return p.channels?.[name]
-        ?? (name === 'weight' ? p.weight : name === 'progress' ? p.progress : 1);
-    };
     const binds = parseBinds(params.binds);
 
     // sequence the slots — a view over the layout; slot identity is untouched
@@ -311,7 +304,7 @@ export const PlaceNode: NodeDef = {
       let rotation = e.transform.rotation + p.rotation;
       let blur = 0;
       for (const b of binds) {
-        let s = signal(p, b.channel);
+        let s = readChannel(p, b.channel);
         if (b.invert) s = 1 - s;
         s += b.offset ?? 0;
         if (b.target === 'scale') scale *= 1 - b.amount * (1 - s);

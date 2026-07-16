@@ -105,13 +105,21 @@ export const ToAlphaNode: NodeDef = {
   params: [
     { name: 'source', kind: 'select', options: ['luminance', 'alpha'], default: 'luminance' },
     { name: 'invert', kind: 'select', options: ['no', 'yes'], default: 'no' },
+    // in = value ≥ threshold (after invert); softness feathers a band around
+    // the cutoff instead of a hard step, for anti-aliased mask edges
+    { name: 'threshold', kind: 'number', default: 0.5, min: 0, max: 1, step: 0.01 },
+    { name: 'softness', kind: 'number', default: 0, min: 0, max: 0.5, step: 0.01 },
   ],
   cook(inputs, params, ctx) {
     requireGpu(ctx);
     const src = inputs.in as RasterValue;
     const dst = ctx.gpu!.pool.acquire(src.width, src.height);
-    ctx.gpu!.runPass('toalpha', src.texture, dst,
-      new Float32Array([params.source === 'alpha' ? 1 : 0, params.invert === 'yes' ? 1 : 0, 0, 0]));
+    ctx.gpu!.runPass('toalpha', src.texture, dst, new Float32Array([
+      params.source === 'alpha' ? 1 : 0,
+      params.invert === 'yes' ? 1 : 0,
+      Number(params.threshold),
+      Number(params.softness),
+    ]));
     return { out: { kind: 'alpha', texture: dst, width: src.width, height: src.height } satisfies AlphaValue };
   },
 };

@@ -159,7 +159,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 
 // Luminance (as seen on white paper) or alpha as a signal, written to all channels.
 export const TO_ALPHA_FS = /* wgsl */ `
-struct ToAlphaU { useAlpha: f32, invert: f32, _p2: f32, _p3: f32 }
+struct ToAlphaU { useAlpha: f32, invert: f32, threshold: f32, softness: f32 }
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> u: ToAlphaU;
@@ -170,6 +170,13 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let lum = dot(mix(vec3f(1.0), c.rgb, c.a), vec3f(0.2126, 0.7152, 0.0722));
   var v = select(lum, c.a, u.useAlpha > 0.5);
   v = select(v, 1.0 - v, u.invert > 0.5);
+  // the cutoff is authored here, visibly — not by whoever samples the mask.
+  // softness 0 is a hard step; > 0 feathers a band around the threshold
+  v = select(
+    step(u.threshold, v),
+    smoothstep(u.threshold - u.softness, u.threshold + u.softness, v),
+    u.softness > 0.0,
+  );
   return vec4f(v, v, v, 1.0);
 }
 `;

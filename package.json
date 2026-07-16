@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "setup": "./scripts/setup.sh",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

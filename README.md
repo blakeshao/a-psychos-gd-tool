@@ -14,9 +14,8 @@ A node-based graphic design tool that runs in the browser, on the GPU. You build
 ## Quick start
 
 ```sh
-npm install
-./scripts/get-font.sh   # fetches a free font into public/fonts/ (falls back to a system font, gitignored)
-npm run dev             # open the printed URL in a WebGPU browser
+./scripts/setup.sh   # checks Node, installs deps, fetches a free font into public/fonts/
+npm run dev          # open the printed URL in a WebGPU browser
 ```
 
 You'll get a default graph cooking to the artboard. Add nodes from the palette, drag wires between sockets — handle colors encode socket types, and illegal wires are rejected on drag.
@@ -71,10 +70,10 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 | Recolor | `raster → raster` | Duotone: remaps luminance onto a dark→light two-color ramp. |
 | Chroma Key | `raster → raster` | Keys a color out to transparency, with tolerance and softness. |
 | **Layout** | | The slot lane: decide what placement slots exist and what signals ride on them — Place decides how elements meet them. |
-| Grid | `→ layout` | Weighted rows × columns over the frame's padded content box — per-axis track distributions (uniform / fibonacci / golden / geometric / custom / expression), gaps, stagger, fill flow. |
-| Sample Path | `vector → layout` | Even arc-length samples along a path, with optional tangent rotation; progress = position along the path. |
-| Math Function | `→ layout` | Places N slots on a circle, spiral, or wave. |
-| Random | `layout? → layout` | Standalone: uniform random placements in an area; wired: seeded jitter (offset / rotation / scale) on an upstream layout. |
+| Grid | `(raster/alpha mask?) → layout` | Weighted rows × columns over the frame's padded content box — per-axis track distributions (uniform / fibonacci / golden / geometric / custom / expression), gaps, stagger, fill flow. A mask decides which cells exist. |
+| Sample Path | `vector (+ raster/alpha mask?) → layout` | Even arc-length samples along a path, with optional tangent rotation; progress = position along the path. A mask trims samples to its coverage. |
+| Math Function | `(raster/alpha mask?) → layout` | Even arc-length slots along a circle, spiral, or wave — the gap decides how many fit the curve. A mask trims slots to its coverage. |
+| Random | `layout? (+ raster/alpha mask?) → layout` | Standalone: random placements in an area — uniform, poisson-disk, or gaussian, with spacing as the density knob (poisson: the min distance); a mask trims them to its coverage. Wired: seeded jitter (offset / rotation / scale) on an upstream layout, constrained to the mask. |
 | Weight | `layout (+ raster?) → layout` | Writes a signal channel onto each slot — noise, image luma/alpha/saturation, progress, cell area, distance from center, or an expression — for Place and Filter to read. |
 | Filter | `layout → layout` | Prunes slots: every nth, channel threshold, or random keep. Survivors keep their identity for by-index Place. |
 | **Placement** | | The element lane: decide how many things exist and marry them to layout slots. |
@@ -86,7 +85,7 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 | Trace | `raster → vector` | Pixels become paths, by region fill or Sobel edge detection, traced in a Web Worker. |
 | Remove Background | `raster → raster` | Segments the foreground subject (RMBG-1.4 via Transformers.js, in a worker) and folds the mask into the image's alpha. |
 | Outline Image | `raster → vector` | Traces a hollow outline around the image's alpha silhouette — pairs with Remove Background. |
-| To Alpha | `raster → alpha` | Extracts a mask from luminance or alpha, optionally inverted. |
+| To Alpha | `raster → alpha` | Extracts a mask from luminance or alpha, optionally inverted, cut at an explicit threshold (softness feathers the edge; note luminance reads transparency as white paper). |
 | Draw Layout | `layout → vector` | Renders slots as debug geometry — cell rects for grids, dot-and-tick markers elsewhere. |
 | Flatten | `elements → vector` | Collapses placed elements into one vector, baking each element's transform into its paths. |
 | **Composition** | | Merge separate lanes into one image before (or instead of) the artboard. |
@@ -122,7 +121,7 @@ Both default to `http://localhost:5199/` (pass your dev server's URL) and locate
 2. ~~Node editor wired to the engine; type-checking on drag~~
 3. ~~Raster breadth: Noise, Dither, Recolor, Chroma Key, ASCII, To Alpha, Composite~~
 4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ (vector Slice deferred)
-5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (Alpha Map deferred)
+5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (~~Alpha Map~~ landed as the generators' mask input)
 6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)
 7. Persistence, export, ~~undo~~
 
