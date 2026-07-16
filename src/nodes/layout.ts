@@ -1,17 +1,47 @@
 // Layout lane: what slots exist + what signal rides on them.
 // Generators (Grid, Sample Path, Function, Random) create slots with honest
-// channel defaults; Weight authors the weight channel deliberately; Filter
-// prunes slots (the only lane node that deletes geometry). Ordering is NOT a
-// lane concern — Place owns the element↔slot mapping (elements.ts). Draw
-// Layout renders slots as geometry. Channel contract: Placement in values.ts.
+// channel defaults. None takes a count: each prescribes structure (lattice,
+// arc-length gap, density) and how many slots exist falls out — the element
+// lane decides how many get filled (elements.ts). Each takes an optional mask
+// that bounds its domain: the prescribed structure holds and the mask trims
+// slots to its coverage, born as a clean run (unlike Filter, which prunes a
+// run that already exists, by signal rather than area). Weight authors the
+// weight channel deliberately; Filter prunes slots (the only lane node that
+// deletes existing geometry). Ordering is NOT a lane concern — Place owns the element↔slot
+// mapping (elements.ts). Draw Layout renders slots as geometry. Channel
+// contract: Placement in values.ts.
 
 import { boundsOfPaths, flattenPaths, polylinesToPaths, samplePathEvenly } from '../engine/path';
-import type { NodeDef } from '../engine/registry';
-import type { LayoutValue, PathCmd, Placement, RasterValue, VectorValue } from '../engine/values';
+import type { CookContext, NodeDef, SocketSpec } from '../engine/registry';
+import { readChannel, type AlphaValue, type LayoutValue, type PathCmd, type Placement, type RasterValue, type VectorValue } from '../engine/values';
 import { compileExpr } from '../util/expr';
 import { latticeHash } from '../util/noise';
 
 const PHI = (1 + Math.sqrt(5)) / 2;
+
+/** Every generator takes this: an optional area the distribution must stay inside. */
+const MASK_INPUT: SocketSpec = { name: 'mask', type: ['raster', 'alpha'], optional: true };
+
+/**
+ * The generators' mask: a raster's alpha channel (a Remove Background cutout,
+ * a PNG with transparency) or an alpha value's mask (To Alpha writes it to
+ * RGB). One readback, then point tests in layout space — layouts are
+ * origin-at-center, the mask is sampled center-aligned; in = coverage ≥ 0.5.
+ */
+async function maskTest(
+  mask: RasterValue | AlphaValue | undefined,
+  ctx: CookContext,
+): Promise<((x: number, y: number) => boolean) | null> {
+  if (!mask) return null;
+  if (!ctx.gpu) throw new Error('a mask input needs a GPU context');
+  const img = await ctx.gpu.readback(mask.texture);
+  const ch = mask.kind === 'alpha' ? 0 : 3;
+  return (x, y) => {
+    const px = Math.min(img.width - 1, Math.max(0, Math.round(x + img.width / 2)));
+    const py = Math.min(img.height - 1, Math.max(0, Math.round(y + img.height / 2)));
+    return img.data[(py * img.width + px) * 4 + ch] >= 128;
+  };
+}
 
 // every distribution is a weight generator `(i, n) → w`; the content span is
 // split proportionally, fr-style — fibonacci is literally `1fr 1fr 2fr 3fr 5fr`
@@ -82,7 +112,7 @@ function axisTracks(weights: number[], gap: number, span: number): { centers: nu
 
 export const GridNode: NodeDef = {
   type: 'Grid',
-  inputs: [],
+  inputs: [MASK_INPUT],
   outputs: [{ name: 'out', type: 'layout' }],
   usesFrame: true,
   params: [
@@ -117,7 +147,8 @@ export const GridNode: NodeDef = {
     // fill order — Place assigns elements by placement order, so this is layout
     { name: 'flow', kind: 'select', options: ['rows', 'columns', 'serpentine'], default: 'rows' },
   ],
-  cook(_inputs, params, ctx) {
+  async cook(inputs, params, ctx) {
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
     const cols = Math.max(1, Math.round(Number(params.columns)));
     const rows = Math.max(1, Math.round(Number(params.rows)));
     const gapX = Number(params.gapX), gapY = Number(params.gapY);
@@ -167,7 +198,7 @@ export const GridNode: NodeDef = {
     });
 
     // emit in fill order; index = slot identity, progress = position along that order
-    const placements: Placement[] = [];
+    let placements: Placement[] = [];
     if (params.flow === 'columns') {
       for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) placements.push(cell(c, r));
     } else {
@@ -175,6 +206,9 @@ export const GridNode: NodeDef = {
         for (let c = 0; c < cols; c++)
           placements.push(cell(params.flow === 'serpentine' && r % 2 === 1 ? cols - 1 - c : c, r));
     }
+    // the lattice is fixed by columns/rows; the mask decides which cells exist.
+    // Masking happens before index/progress, so the slots are born a clean run
+    if (inMask) placements = placements.filter((p) => inMask(p.x, p.y));
     placements.forEach((p, i) => {
       p.index = i;
       p.progress = placements.length === 1 ? 0 : i / (placements.length - 1);
@@ -185,11 +219,14 @@ export const GridNode: NodeDef = {
 
 export const RandomLayoutNode: NodeDef = {
   type: 'Random',
-  inputs: [{ name: 'layout', type: 'layout', optional: true }],
+  inputs: [{ name: 'layout', type: 'layout', optional: true }, MASK_INPUT],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
-    // generate mode (no input): uniform placements in an area
-    { name: 'count', kind: 'number', default: 24, min: 1, max: 1000, step: 1 },
+    // generate mode (no input): random placements in an area. spacing is the
+    // density knob — how many fit follows from area / spacing² (poisson-disk
+    // reads it as the min distance and packs until the stream runs dry)
+    { name: 'distribution', kind: 'select', options: ['uniform', 'poisson-disk', 'gaussian'], default: 'uniform' },
+    { name: 'spacing', kind: 'number', default: 100, min: 10, max: 500, step: 1 },
     { name: 'areaWidth', kind: 'number', default: 600, min: 10, max: 4096, step: 1 },
     { name: 'areaHeight', kind: 'number', default: 400, min: 10, max: 4096, step: 1 },
     // modulate mode (input wired): seeded jitter on existing placements
@@ -198,36 +235,76 @@ export const RandomLayoutNode: NodeDef = {
     { name: 'scaleJitter', kind: 'number', default: 0, min: 0, max: 1, step: 0.01 },
     { name: 'seed', kind: 'number', default: 1, min: 0, max: 9999, step: 1 },
   ],
-  cook(inputs, params) {
+  async cook(inputs, params, ctx) {
     const seed = Number(params.seed);
     const upstream = inputs.layout as LayoutValue | undefined;
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
 
     if (!upstream) {
-      const count = Math.round(Number(params.count));
       const w = Number(params.areaWidth), h = Number(params.areaHeight);
-      const placements: Placement[] = [];
-      for (let i = 0; i < count; i++) {
-        placements.push({
-          x: (latticeHash(i, 1, seed) - 0.5) * w,
-          y: (latticeHash(i, 2, seed) - 0.5) * h,
-          rotation: 0,
-          scale: 1,
-          progress: count === 1 ? 0 : i / (count - 1),
-          weight: 1, // no density signal — wire a Weight(noise) for a random one
-          index: i,
-        });
+      const spacing = Math.max(1, Number(params.spacing ?? 100));
+      const gaussian = params.distribution === 'gaussian';
+      const poisson = params.distribution === 'poisson-disk';
+      // how many fit follows from the density: one point per spacing² of area
+      // (capped — a tiny spacing over a huge area shouldn't melt the cook)
+      const target = Math.max(1, Math.min(1000, Math.round((w * h) / (spacing * spacing))));
+      // walk a deterministic candidate stream until the area's quota fills:
+      // gaussian redraws its out-of-area tail, poisson-disk drops candidates
+      // closer than `spacing` to an accepted point (dart throwing — it stops
+      // early once the stream runs dry). Uniform accepts every candidate
+      const accepted: { x: number; y: number }[] = [];
+      const maxTries = target * 16 + 64;
+      for (let j = 0; accepted.length < target && j < maxTries; j++) {
+        let x: number, y: number;
+        if (gaussian) {
+          // Box–Muller on the stream; σ = extent/4 keeps ~95% inside the area
+          const m = Math.sqrt(-2 * Math.log(Math.max(latticeHash(j, 1, seed), 1e-9)));
+          const a = latticeHash(j, 2, seed) * Math.PI * 2;
+          x = m * Math.cos(a) * (w / 4);
+          y = m * Math.sin(a) * (h / 4);
+          if (Math.abs(x) > w / 2 || Math.abs(y) > h / 2) continue;
+        } else {
+          x = (latticeHash(j, 1, seed) - 0.5) * w;
+          y = (latticeHash(j, 2, seed) - 0.5) * h;
+        }
+        if (poisson && accepted.some((p) => Math.hypot(p.x - x, p.y - y) < spacing)) continue;
+        accepted.push({ x, y });
       }
+      // the mask trims the finished set, so the prescribed spacing holds
+      // inside it and points that were already in-mask stay put when one is
+      // wired — survivors are renumbered as a clean run
+      const kept = inMask ? accepted.filter((p) => inMask(p.x, p.y)) : accepted;
+      const placements: Placement[] = kept.map((p, i) => ({
+        x: p.x,
+        y: p.y,
+        rotation: 0,
+        scale: 1,
+        progress: kept.length === 1 ? 0 : i / (kept.length - 1),
+        weight: 1,
+        index: i,
+      }));
       return { out: { kind: 'layout', placements } satisfies LayoutValue };
     }
 
     const off = Number(params.offset), rot = Number(params.rotate), sj = Number(params.scaleJitter);
-    const placements = upstream.placements.map((p, i) => ({
-      ...p,
-      x: p.x + (latticeHash(i, 11, seed) - 0.5) * 2 * off,
-      y: p.y + (latticeHash(i, 12, seed) - 0.5) * 2 * off,
-      rotation: p.rotation + (latticeHash(i, 13, seed) - 0.5) * 2 * rot,
-      scale: p.scale * (1 + (latticeHash(i, 14, seed) - 0.5) * 2 * sj),
-    }));
+    const placements = upstream.placements.map((p, i) => {
+      // masked jitter constrains movement, not existence: take the first
+      // offset that stays inside, else stay put. Try 0 matches the unmasked
+      // roll, so wiring a mask never moves a point that was already legal
+      let x = p.x, y = p.y;
+      for (let k = 0; k < 8; k++) {
+        const nx = p.x + (latticeHash(i, 11 + 30 * k, seed) - 0.5) * 2 * off;
+        const ny = p.y + (latticeHash(i, 12 + 30 * k, seed) - 0.5) * 2 * off;
+        if (!inMask || inMask(nx, ny)) { x = nx; y = ny; break; }
+      }
+      return {
+        ...p,
+        x,
+        y,
+        rotation: p.rotation + (latticeHash(i, 13, seed) - 0.5) * 2 * rot,
+        scale: p.scale * (1 + (latticeHash(i, 14, seed) - 0.5) * 2 * sj),
+      };
+    });
     // jitter moves points; a ring is still a ring
     return { out: { kind: 'layout', placements, closed: upstream.closed } satisfies LayoutValue };
   },
@@ -236,7 +313,7 @@ export const RandomLayoutNode: NodeDef = {
 export const SamplePathNode: NodeDef = {
   type: 'SamplePath',
   label: 'Sample Path',
-  inputs: [{ name: 'path', type: 'vector' }],
+  inputs: [{ name: 'path', type: 'vector' }, MASK_INPUT],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
     // gap (arc-length spacing) decides how many points fit; the element lane
@@ -245,13 +322,11 @@ export const SamplePathNode: NodeDef = {
     { name: 'offset', kind: 'number', default: 0, min: 0, max: 2000, step: 1 },
     { name: 'tangent', kind: 'select', options: ['rotate', 'upright'], default: 'rotate' },
   ],
-  cook(inputs, params) {
+  async cook(inputs, params, ctx) {
     const vector = inputs.path as VectorValue;
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
     const polys = flattenPaths(vector.paths);
     const samples = samplePathEvenly(polys, Number(params.gap), Number(params.offset));
-    // a loop layout (every contour closed, like a silhouette outline) lets Place
-    // spread elements across the closing segment too, with no seam.
-    const closed = polys.length > 0 && polys.every((p) => p.closed);
     // The path lives in its source space (a traced image is in top-left frame
     // pixels), but layouts are origin-at-center like Grid/Function/Random — and
     // the element renderer treats (0,0) as the artboard center. Recenter on the
@@ -260,9 +335,18 @@ export const SamplePathNode: NodeDef = {
     const b = vector.bounds;
     const cx = b.x + b.width / 2;
     const cy = b.y + b.height / 2;
-    const placements: Placement[] = samples.map((s, i) => ({
-      x: s.x - cx,
-      y: s.y - cy,
+    // spacing is gap-driven, so the mask trims samples rather than re-spacing
+    // them; progress keeps the true arc position on the source path
+    const kept = samples
+      .map((s) => ({ ...s, x: s.x - cx, y: s.y - cy }))
+      .filter((s) => !inMask || inMask(s.x, s.y));
+    // a loop layout (every contour closed, like a silhouette outline) lets Place
+    // spread elements across the closing segment too, with no seam. A mask that
+    // trimmed anything cut the loop open.
+    const closed = polys.length > 0 && polys.every((p) => p.closed) && kept.length === samples.length;
+    const placements: Placement[] = kept.map((s, i) => ({
+      x: s.x,
+      y: s.y,
       rotation: params.tangent === 'rotate' ? s.rotation : 0,
       scale: 1,
       progress: s.t, // arc-length position
@@ -276,47 +360,60 @@ export const SamplePathNode: NodeDef = {
 export const FunctionLayoutNode: NodeDef = {
   type: 'Function',
   label: 'Math Function',
-  inputs: [],
+  inputs: [MASK_INPUT],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
     { name: 'fn', kind: 'select', options: ['circle', 'spiral', 'wave'], default: 'circle' },
-    { name: 'count', kind: 'number', default: 16, min: 1, max: 500, step: 1 },
+    // arc-length spacing between slots — the curve's own geometry (radius,
+    // turns, width) fixes its length, the gap decides how many slots fit
+    { name: 'gap', kind: 'number', default: 40, min: 1, max: 2000, step: 1 },
     { name: 'radius', kind: 'number', default: 200, min: 1, max: 1000, step: 1 },
     { name: 'turns', kind: 'number', default: 3, min: 0.25, max: 12, step: 0.25 },
-    { name: 'spacing', kind: 'number', default: 40, min: 1, max: 300, step: 1 },
+    { name: 'width', kind: 'number', default: 600, min: 10, max: 4096, step: 1, showIf: { param: 'fn', in: ['wave'] } },
   ],
-  cook(_inputs, params) {
-    const count = Math.round(Number(params.count));
-    const r = Number(params.radius), turns = Number(params.turns), spacing = Number(params.spacing);
-    const placements: Placement[] = [];
-    for (let i = 0; i < count; i++) {
-      const t = count === 1 ? 0 : i / (count - 1);
-      let x = 0, y = 0, rotation = 0;
+  async cook(inputs, params, ctx) {
+    const gap = Number(params.gap ?? 40);
+    const r = Number(params.radius), turns = Number(params.turns), width = Number(params.width ?? 600);
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
+    const circle = params.fn === 'circle';
+
+    // the curve as a function of u ∈ [0,1]
+    const pointAt = (u: number): { x: number; y: number } => {
       switch (params.fn) {
         case 'spiral': {
-          const a = turns * Math.PI * 2 * t;
-          const rr = r * t;
-          x = Math.cos(a) * rr;
-          y = Math.sin(a) * rr;
-          rotation = a + Math.PI / 2;
-          break;
+          const a = turns * Math.PI * 2 * u;
+          return { x: Math.cos(a) * r * u, y: Math.sin(a) * r * u };
         }
         case 'wave':
-          x = (i - (count - 1) / 2) * spacing;
-          y = Math.sin(t * turns * Math.PI * 2) * r * 0.25;
-          rotation = Math.atan2(Math.cos(t * turns * Math.PI * 2), 1) * 0.5;
-          break;
-        default: { // circle: closed spacing, no doubled endpoint
-          const a = (i / count) * Math.PI * 2 - Math.PI / 2;
-          x = Math.cos(a) * r;
-          y = Math.sin(a) * r;
-          rotation = a + Math.PI / 2;
+          return { x: (u - 0.5) * width, y: Math.sin(u * turns * Math.PI * 2) * r * 0.25 };
+        default: {
+          const a = u * Math.PI * 2 - Math.PI / 2;
+          return { x: Math.cos(a) * r, y: Math.sin(a) * r };
         }
       }
-      placements.push({ x, y, rotation, scale: 1, progress: t, weight: 1, index: i });
-    }
-    // a circle is a loop by construction — spread should wrap, not seam
-    const closed = params.fn === 'circle' ? true : undefined;
+    };
+
+    // flatten the curve and reuse the path sampler — same contract as Sample
+    // Path (gap decides how many fit, rotation is the tangent, progress the
+    // arc position), this node just supplies its own path
+    const M = 4096; // ≤ ~10px segments even on a 12-turn spiral at max radius
+    const points = Array.from({ length: circle ? M : M + 1 }, (_, j) => pointAt(j / M));
+    const samples = samplePathEvenly([{ points, closed: circle }], gap);
+    // spacing is gap-driven, so the mask trims samples rather than re-spacing
+    // them; progress keeps the true arc position on the curve
+    const kept = samples.filter((s) => !inMask || inMask(s.x, s.y));
+    const placements: Placement[] = kept.map((s, i) => ({
+      x: s.x,
+      y: s.y,
+      rotation: s.rotation,
+      scale: 1,
+      progress: s.t, // arc-length position
+      weight: 1,
+      index: i,
+    }));
+    // a circle is a loop by construction — spread should wrap, not seam.
+    // A mask that trimmed any of it cut the loop open
+    const closed = circle && kept.length === samples.length ? true : undefined;
     return { out: { kind: 'layout', placements, closed } satisfies LayoutValue };
   },
 };
@@ -444,9 +541,9 @@ export const FilterLayoutNode: NodeDef = {
   params: [
     { name: 'mode', kind: 'select', options: ['every-nth', 'threshold', 'random'], default: 'every-nth' },
     { name: 'n', kind: 'number', default: 2, min: 1, max: 32, step: 1, showIf: { param: 'mode', in: ['every-nth'] } },
-    // built-ins + the Weight source names (channels are named after sources);
-    // an unwritten channel reads neutral 1
-    { name: 'channel', kind: 'select', options: ['weight', 'progress', 'noise', 'image luma', 'image alpha', 'image sat', 'area', 'distance', 'expression'], default: 'weight', showIf: { param: 'mode', in: ['threshold'] } },
+    // same mechanism as Place's binds: the editor offers the built-ins plus
+    // the channels this document's Weights write; an unwritten name reads 1
+    { name: 'channel', kind: 'channel', default: 'weight', showIf: { param: 'mode', in: ['threshold'] } },
     { name: 'comparison', kind: 'select', options: ['above', 'below'], default: 'above', showIf: { param: 'mode', in: ['threshold'] } },
     { name: 'threshold', kind: 'number', default: 0.5, min: 0, max: 1, step: 0.01, showIf: { param: 'mode', in: ['threshold'] } },
     { name: 'keep', kind: 'number', default: 0.5, min: 0, max: 1, step: 0.01, showIf: { param: 'mode', in: ['random'] } },
@@ -457,10 +554,7 @@ export const FilterLayoutNode: NodeDef = {
     const placements = layout.placements.filter((p, i) => {
       switch (params.mode) {
         case 'threshold': {
-          // channels-first: an authored channel shadows a built-in of the same name
-          const name = String(params.channel);
-          const v = p.channels?.[name]
-            ?? (name === 'progress' ? p.progress : name === 'weight' ? p.weight : 1);
+          const v = readChannel(p, String(params.channel));
           return params.comparison === 'below' ? v < Number(params.threshold) : v >= Number(params.threshold);
         }
         case 'random':

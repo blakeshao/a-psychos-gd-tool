@@ -126,6 +126,14 @@ function NodeParam({
   if (spec.kind === 'binds') {
     return <BindList value={String(value)} onChange={onChange} />;
   }
+  if (spec.kind === 'channel') {
+    return (
+      <label className="param">
+        <span>{spec.name}</span>
+        <ChannelSelect value={String(value)} onChange={onChange} />
+      </label>
+    );
+  }
   if (spec.kind === 'image') {
     return (
       <label className="param">
@@ -178,25 +186,42 @@ function NodeParam({
   );
 }
 
-// Place's channel bindings: one row per bind (channel → target, amount, plus
-// offset/invert to shape the signal), and an "add channel" button that appends
-// a row. Rows live in one JSON param; parseBinds is shared with the cook so
-// both sides read it alike.
-function BindList({ value, onChange }: { value: string; onChange: (v: ParamValue) => void }) {
+// What a channel consumer can read: the built-ins + whatever this document's
+// Weights write — channels are named after their Weight node's source.
+function useDocChannels(): string[] {
   const nodes = useApp((s) => s.graph.nodes);
-  const binds = parseBinds(value);
-  const set = (next: BindSpec[]) => onChange(JSON.stringify(next));
-  const patch = (i: number, part: Partial<BindSpec>) =>
-    set(binds.map((b, k) => (k === i ? { ...b, ...part } : b)));
-
-  // what a row can read: the built-ins + whatever this document's Weights
-  // write — channels are named after their Weight node's source
   const channels = ['weight', 'progress'];
   for (const n of Object.values(nodes)) {
     if (n.type !== 'Weight') continue;
     const t = String(n.params.source ?? 'noise').trim();
     if (t && !channels.includes(t)) channels.push(t);
   }
+  return channels;
+}
+
+// One channel dropdown, shared semantics with the binds rows: the document's
+// live channels, keeping the current value selectable even when no Weight
+// writes it (old documents, deleted Weights).
+function ChannelSelect({ value, onChange }: { value: string; onChange: (v: ParamValue) => void }) {
+  const channels = useDocChannels();
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      {(channels.includes(value) ? channels : [...channels, value]).map((c) => (
+        <option key={c} value={c}>{c}</option>
+      ))}
+    </select>
+  );
+}
+
+// Place's channel bindings: one row per bind (channel → target, amount, plus
+// offset/invert to shape the signal), and an "add channel" button that appends
+// a row. Rows live in one JSON param; parseBinds is shared with the cook so
+// both sides read it alike.
+function BindList({ value, onChange }: { value: string; onChange: (v: ParamValue) => void }) {
+  const binds = parseBinds(value);
+  const set = (next: BindSpec[]) => onChange(JSON.stringify(next));
+  const patch = (i: number, part: Partial<BindSpec>) =>
+    set(binds.map((b, k) => (k === i ? { ...b, ...part } : b)));
 
   // amounts mean different things per target: strength (0..1) vs blur px
   const amountSpec = (target: BindSpec['target']): NumberSpec =>
@@ -216,11 +241,7 @@ function BindList({ value, onChange }: { value: string; onChange: (v: ParamValue
           </div>
           <label className="param">
             <span>channel</span>
-            <select value={b.channel} onChange={(e) => patch(i, { channel: e.target.value })}>
-              {(channels.includes(b.channel) ? channels : [...channels, b.channel]).map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
+            <ChannelSelect value={b.channel} onChange={(v) => patch(i, { channel: String(v) })} />
           </label>
           <label className="param">
             <span>target</span>

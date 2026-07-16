@@ -33,6 +33,9 @@ export type ParamSpec = ParamVisibility &
     | { name: string; kind: 'color'; default: string } // '#rrggbb'
     | { name: string; kind: 'toggle'; default: boolean }
     | { name: string; kind: 'select'; options: string[]; default: string }
+    // a slot channel name — the editor offers the built-ins plus whatever the
+    // document's Weight nodes write, same list the binds rows use
+    | { name: string; kind: 'channel'; default: string }
     | { name: string; kind: 'image'; default: string } // a data: URI — travels with the doc
     // a JSON-encoded list of channel bindings ({channel, target, amount}[]) —
     // the editor renders rows plus an "add channel" button; cooks parse it

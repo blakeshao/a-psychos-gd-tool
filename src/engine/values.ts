@@ -157,6 +157,18 @@ export interface Placement {
   h?: number;
 }
 
+/**
+ * A slot signal, channels-first: an authored channel (named after its Weight
+ * source) shadows a built-in of the same name; an unknown name reads as
+ * neutral 1, so a dangling reference bends nothing instead of breaking.
+ * The one read used by every channel consumer (Place binds, Filter threshold).
+ */
+export function readChannel(p: Placement, channel: string): number {
+  const name = channel.trim();
+  return p.channels?.[name]
+    ?? (name === 'weight' ? p.weight : name === 'progress' ? p.progress : 1);
+}
+
 export interface LayoutValue {
   kind: 'layout';
   placements: Placement[];
