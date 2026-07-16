@@ -126,6 +126,14 @@ describe('undo/redo', () => {
     expect(useApp.getState().graph.nodes.blur1.params.radius).toBeUndefined();
   });
 
+  it('endGesture splits two drags of the same node into two undo steps', () => {
+    useApp.getState().moveNode('blur1', { x: 1, y: 0 });
+    useApp.getState().moveNode('blur1', { x: 2, y: 0 }); // same drag — coalesces
+    endGesture(); // drag end
+    useApp.getState().moveNode('blur1', { x: 9, y: 0 });
+    expect(useApp.getState().past).toHaveLength(2);
+  });
+
   it('edits to different params do not coalesce', () => {
     useApp.getState().setParam('blur1', 'radius', 1);
     useApp.getState().setParam('text1', 'content', 'A');

@@ -17,7 +17,7 @@ import '@xyflow/react/dist/style.css';
 import { edgeKey } from '../engine/graph';
 import { socketTypes } from '../engine/registry';
 import { PALETTE, registry } from '../nodes';
-import { useApp, wireIsValid } from '../store';
+import { endGesture, useApp, wireIsValid } from '../store';
 import { GfxNode } from './GfxNode';
 import type { SocketType } from '../engine/values';
 
@@ -71,15 +71,20 @@ export function NodeEditor() {
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const { moveNode, removeNodes, select, selectedNodeId: selected } = useApp.getState();
     const removed: string[] = [];
+    let dragEnded = false;
     for (const c of changes) {
-      if (c.type === 'position' && c.position) moveNode(c.id, c.position);
-      else if (c.type === 'remove') removed.push(c.id);
+      if (c.type === 'position') {
+        if (c.position) moveNode(c.id, c.position);
+        if (c.dragging === false) dragEnded = true;
+      } else if (c.type === 'remove') removed.push(c.id);
       else if (c.type === 'select') {
         if (c.selected) select(c.id);
         else if (selected === c.id) select(null);
       }
     }
     if (removed.length) removeNodes(removed);
+    // the drop lands inside the drag's undo step; the next drag is its own
+    if (dragEnded) endGesture();
   }, []);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
