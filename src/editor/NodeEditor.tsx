@@ -19,7 +19,7 @@ import '@xyflow/react/dist/style.css';
 import { edgeKey } from '../engine/graph';
 import { socketTypes } from '../engine/registry';
 import { PALETTE, registry } from '../nodes';
-import { endGesture, useApp, wireIsValid } from '../store';
+import { endGesture, selectActiveGraph, useApp, wireIsValid } from '../store';
 import { GfxNode } from './GfxNode';
 import type { SocketType } from '../engine/values';
 
@@ -41,7 +41,7 @@ const WIRE_COLORS: Record<SocketType, string> = {
 };
 
 export function NodeEditor() {
-  const graph = useApp((s) => s.graph);
+  const graph = useApp(selectActiveGraph);
   const selectedNodeId = useApp((s) => s.selectedNodeId);
 
   const nodes: FlowNode[] = useMemo(
@@ -110,7 +110,7 @@ export function NodeEditor() {
 
   const isValidConnection = useCallback((conn: Connection | FlowEdge) => {
     if (!conn.sourceHandle || !conn.targetHandle) return false;
-    return wireIsValid(useApp.getState().graph, {
+    return wireIsValid(selectActiveGraph(useApp.getState()), {
       source: conn.source,
       sourceHandle: conn.sourceHandle,
       target: conn.target,
@@ -167,7 +167,7 @@ function Palette() {
     const cx = (width / 2 - x) / zoom - NODE_WIDTH / 2;
     const cy = (height / 2 - y) / zoom - NODE_HEIGHT_GUESS / 2;
     // nudge each new node so repeated adds don't stack exactly
-    const count = Object.keys(useApp.getState().graph.nodes).length;
+    const count = Object.keys(selectActiveGraph(useApp.getState()).nodes).length;
     const offset = (count % 5) * 24;
     useApp.getState().addNode(type, { x: cx + offset, y: cy + offset });
   };

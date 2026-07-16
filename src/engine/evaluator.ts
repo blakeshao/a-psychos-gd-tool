@@ -56,6 +56,14 @@ export class Evaluator {
     return result;
   }
 
+  /** Release every cached texture and forget everything — called when the
+   * graph this evaluator serves (a layer) is deleted. */
+  dispose(ctx: CookContext) {
+    for (const entry of this.entries.values()) disposeOutputs(entry.outputs, ctx);
+    this.entries.clear();
+    this.latestHash.clear();
+  }
+
   /** Drop cache entries superseded by a newer hash for the same node, freeing their textures. */
   private evictStale(ctx: CookContext) {
     for (const [hash, entry] of this.entries) {
