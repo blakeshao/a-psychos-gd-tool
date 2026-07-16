@@ -415,7 +415,8 @@ type NumberSpec = Extract<ParamSpec, { kind: 'number' }>;
 
 // Blender-style number field: drag horizontally to scrub the value, click the
 // ‹ › arrows to step, or click the field to type an exact value.
-function NumberDrag({
+// Also used by the layers panel for opacity, so all numeric controls match.
+export function NumberDrag({
   spec,
   value,
   onChange,

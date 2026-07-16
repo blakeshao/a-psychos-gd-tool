@@ -205,6 +205,19 @@ describe('layers', () => {
     expect(useApp.getState().past.length).toBe(before + 1);
   });
 
+  it('moveLayerTo places a layer at an absolute index, clamped, no-op in place', () => {
+    useApp.getState().addLayer();
+    useApp.getState().addLayer();
+    const [a, b, c] = useApp.getState().doc.layers.map((l) => l.id);
+    useApp.getState().moveLayerTo(c, 0);
+    expect(useApp.getState().doc.layers.map((l) => l.id)).toEqual([c, a, b]);
+    const before = useApp.getState().past.length;
+    useApp.getState().moveLayerTo(c, 0); // already there — no-op, no history
+    expect(useApp.getState().past.length).toBe(before);
+    useApp.getState().moveLayerTo(c, 99); // clamps to the top
+    expect(useApp.getState().doc.layers.map((l) => l.id)).toEqual([a, b, c]);
+  });
+
   it('removeLayer refuses to drop the last layer and re-targets the active one', () => {
     useApp.getState().removeLayer('layer_1');
     expect(useApp.getState().doc.layers).toHaveLength(1); // refused

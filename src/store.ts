@@ -236,6 +236,8 @@ interface AppStore {
   removeLayer: (id: string) => void;
   /** +1 raises the layer in the stack, -1 lowers it; no-op at the ends */
   moveLayer: (id: string, dir: 1 | -1) => void;
+  /** drag-and-drop reorder: place a layer at an absolute stack index (0 = bottom) */
+  moveLayerTo: (id: string, to: number) => void;
   updateLayer: (id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blendMode'>>) => void;
   addFont: (key: string, font: Font) => void;
   /** parse a queryable local font (by family) into the cookable fonts map */
@@ -449,6 +451,18 @@ export const useApp = create<AppStore>((set, get) => ({
       if (at === -1 || to < 0 || to >= s.doc.layers.length) return s;
       const layers = [...s.doc.layers];
       [layers[at], layers[to]] = [layers[to], layers[at]];
+      return { ...pushHistory(s, null), doc: { ...s.doc, layers } };
+    }),
+
+  moveLayerTo: (id, to) =>
+    set((s) => {
+      const at = s.doc.layers.findIndex((l) => l.id === id);
+      if (at === -1) return s;
+      const clamped = Math.max(0, Math.min(s.doc.layers.length - 1, to));
+      if (clamped === at) return s;
+      const layers = [...s.doc.layers];
+      const [layer] = layers.splice(at, 1);
+      layers.splice(clamped, 0, layer);
       return { ...pushHistory(s, null), doc: { ...s.doc, layers } };
     }),
 
