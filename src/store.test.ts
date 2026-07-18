@@ -68,7 +68,7 @@ describe('wireIsValid', () => {
 });
 
 describe('store actions', () => {
-  beforeEach(() => useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null }));
+  beforeEach(() => useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeIds: [] }));
 
   it('connect replaces the existing wire on an input socket', () => {
     useApp.getState().connect({ source: 'raster1', sourceHandle: 'out', target: 'out', targetHandle: 'in' });
@@ -101,7 +101,7 @@ describe('store actions', () => {
 
 describe('undo/redo', () => {
   beforeEach(() => {
-    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null, past: [], future: [] });
+    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeIds: [], past: [], future: [] });
     endGesture();
   });
 
@@ -137,11 +137,22 @@ describe('undo/redo', () => {
   });
 
   it('endGesture splits two drags of the same node into two undo steps', () => {
-    useApp.getState().moveNode('blur1', { x: 1, y: 0 });
-    useApp.getState().moveNode('blur1', { x: 2, y: 0 }); // same drag — coalesces
+    useApp.getState().moveNodes({ blur1: { x: 1, y: 0 } });
+    useApp.getState().moveNodes({ blur1: { x: 2, y: 0 } }); // same drag — coalesces
     endGesture(); // drag end
-    useApp.getState().moveNode('blur1', { x: 9, y: 0 });
+    useApp.getState().moveNodes({ blur1: { x: 9, y: 0 } });
     expect(useApp.getState().past).toHaveLength(2);
+  });
+
+  it('a group drag is one undo step that restores every node', () => {
+    useApp.getState().moveNodes({ blur1: { x: 1, y: 0 }, raster1: { x: 1, y: 1 } });
+    useApp.getState().moveNodes({ blur1: { x: 2, y: 0 }, raster1: { x: 2, y: 1 } }); // same drag — coalesces
+    endGesture();
+    expect(useApp.getState().past).toHaveLength(1);
+    useApp.getState().undo();
+    const g = activeGraph();
+    expect(g.nodes.blur1.position).toBeUndefined();
+    expect(g.nodes.raster1.position).toBeUndefined();
   });
 
   it('edits to different params do not coalesce', () => {
@@ -161,17 +172,26 @@ describe('undo/redo', () => {
     expect(useApp.getState().doc).toBe(before);
   });
 
-  it('the selection is dropped when the selected node vanishes on undo', () => {
+  it('selected nodes that vanish on undo are dropped from the selection', () => {
+    useApp.getState().select(['text1']);
     useApp.getState().addNode('Blur', { x: 0, y: 0 });
-    expect(useApp.getState().selectedNodeId).not.toBeNull();
+    expect(useApp.getState().selectedNodeIds).toHaveLength(1);
+    useApp.getState().select([...useApp.getState().selectedNodeIds, 'text1']);
     useApp.getState().undo();
-    expect(useApp.getState().selectedNodeId).toBeNull();
+    // the added node is gone; the surviving node stays selected
+    expect(useApp.getState().selectedNodeIds).toEqual(['text1']);
+  });
+
+  it('removeNodes drops the removed ids from a multi-selection', () => {
+    useApp.getState().select(['blur1', 'raster1', 'text1']);
+    useApp.getState().removeNodes(['blur1', 'raster1']);
+    expect(useApp.getState().selectedNodeIds).toEqual(['text1']);
   });
 });
 
 describe('layers', () => {
   beforeEach(() => {
-    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null, past: [], future: [] });
+    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeIds: [], past: [], future: [] });
     endGesture();
   });
 

@@ -16,7 +16,8 @@ export const ShapeNode: NodeDef = {
     { name: 'width', kind: 'number', default: 300, min: 1, max: 2000, step: 1 },
     { name: 'height', kind: 'number', default: 300, min: 1, max: 2000, step: 1 },
     { name: 'sides', kind: 'number', default: 6, min: 3, max: 24, step: 1 },
-    { name: 'fill', kind: 'color', default: '#000000' },
+    { name: 'filled', kind: 'toggle', default: true },
+    { name: 'fill', kind: 'color', default: '#000000', showIf: { param: 'filled', in: ['true'] } },
     { name: 'stroke', kind: 'toggle', default: false },
     { name: 'strokeColor', kind: 'color', default: '#000000', showIf: { param: 'stroke', in: ['true'] } },
     { name: 'strokeWidth', kind: 'number', default: 4, min: 0, max: 100, step: 0.5, showIf: { param: 'stroke', in: ['true'] } },
@@ -61,6 +62,7 @@ export const ShapeNode: NodeDef = {
     }
     const style: Style = {
       fill: String(params.fill ?? '#000000'),
+      fillEnabled: params.filled !== false,
       stroke: String(params.strokeColor ?? '#000000'),
       // the toggle folds into the width — 0 reads as "off" everywhere
       strokeWidth: params.stroke === true ? Number(params.strokeWidth ?? 4) : 0,

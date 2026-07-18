@@ -18,12 +18,25 @@ export function appendPath(p: Path2D, cmds: PathCmd[]) {
 
 /**
  * Paint one combined path. Order: outside-aligned stroke first (the opaque
- * fill covers its inner half), then fill, then synthetic weight (grow > 0
- * fattens with a same-color stroke; grow < 0 erodes the rim via
- * destination-out — callers sharing a canvas must isolate such draws on
- * their own layer), then a center/inside stroke on top. Aligned strokes are
- * drawn at double width so exactly one half survives the cover/clip.
+ * fill covers its inner half; with the fill off the inner half is erased
+ * instead), then fill, then synthetic weight (grow > 0 fattens with a
+ * same-color stroke; grow < 0 erodes the rim via destination-out), then a
+ * center/inside stroke on top. Aligned strokes are drawn at double width so
+ * exactly one half survives the cover/clip. Callers sharing a canvas must
+ * isolate erasing draws on their own layer — see paintErases.
  */
+/**
+ * True when painting this style punches through pixels already on the canvas
+ * (destination-out draws) — callers batching several paints onto one shared
+ * layer must give such a draw a fresh layer and flush it out right after.
+ */
+export function paintErases(style: Style = DEFAULT_STYLE): boolean {
+  const filled = style.fillEnabled !== false;
+  return filled
+    ? style.grow < 0
+    : style.strokeWidth > 0 && style.strokeAlign === 'outside';
+}
+
 export function paintPath(
   c2d: OffscreenCanvasRenderingContext2D,
   p: Path2D,
@@ -31,6 +44,7 @@ export function paintPath(
 ) {
   c2d.lineJoin = 'round';
   const w = style.strokeWidth;
+  const filled = style.fillEnabled !== false;
 
   const strokeInk = () => {
     c2d.strokeStyle = style.stroke;
@@ -40,20 +54,28 @@ export function paintPath(
   if (w > 0 && style.strokeAlign === 'outside') {
     c2d.lineWidth = w * 2;
     strokeInk();
+    if (!filled) {
+      // no fill will cover the inner half — knock it back out
+      c2d.globalCompositeOperation = 'destination-out';
+      c2d.fill(p);
+      c2d.globalCompositeOperation = 'source-over';
+    }
   }
 
-  c2d.fillStyle = style.fill;
-  c2d.fill(p);
+  if (filled) {
+    c2d.fillStyle = style.fill;
+    c2d.fill(p);
 
-  if (style.grow > 0) {
-    c2d.strokeStyle = style.fill;
-    c2d.lineWidth = style.grow * 2; // a stroke straddles the edge — half lands outside
-    c2d.stroke(p);
-  } else if (style.grow < 0) {
-    c2d.globalCompositeOperation = 'destination-out';
-    c2d.lineWidth = -style.grow * 2;
-    c2d.stroke(p);
-    c2d.globalCompositeOperation = 'source-over';
+    if (style.grow > 0) {
+      c2d.strokeStyle = style.fill;
+      c2d.lineWidth = style.grow * 2; // a stroke straddles the edge — half lands outside
+      c2d.stroke(p);
+    } else if (style.grow < 0) {
+      c2d.globalCompositeOperation = 'destination-out';
+      c2d.lineWidth = -style.grow * 2;
+      c2d.stroke(p);
+      c2d.globalCompositeOperation = 'source-over';
+    }
   }
 
   if (w > 0 && style.strokeAlign === 'center') {

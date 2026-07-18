@@ -107,7 +107,9 @@ type Status = 'booting' | 'ready' | 'no-webgpu' | 'no-font';
 export default function App() {
   const doc = useApp((s) => s.doc);
   const activeGraph = useApp(selectActiveGraph);
-  const selectedNodeId = useApp((s) => s.selectedNodeId);
+  const selectedNodeIds = useApp((s) => s.selectedNodeIds);
+  // the layout guide only makes sense for one node — hide it for a marquee'd group
+  const selectedNodeId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
   const fonts = useApp((s) => s.fonts);
   const localFonts = useApp((s) => s.localFonts);
   const setFrame = useApp((s) => s.setFrame);
@@ -118,7 +120,11 @@ export default function App() {
   const [cookError, setCookError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [guide, setGuide] = useState<Placement[] | null>(null);
+  const [guide, setGuide] = useState<{
+    placements: Placement[];
+    /** generator's coverage rect (Random's area params), artboard-centered */
+    area?: { width: number; height: number };
+  } | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const guideRef = useRef<HTMLCanvasElement>(null);
@@ -266,7 +272,17 @@ export default function App() {
         };
         const result = await new Evaluator(registry).evaluate(activeGraph, node.id, ctx);
         const value = result.outputs[layoutSocket.name];
-        if (!cancelled) setGuide(value?.kind === 'layout' ? value.placements : null);
+        // a generating Random (no upstream layout) also shows the area its
+        // points are drawn from — params fall back to the def's defaults
+        const generates = node.type === 'Random'
+          && !activeGraph.edges.some((e) => e.to.node === node.id && e.to.socket === 'layout');
+        const area = generates
+          ? {
+              width: Number(node.params.areaWidth ?? 600),
+              height: Number(node.params.areaHeight ?? 400),
+            }
+          : undefined;
+        if (!cancelled) setGuide(value?.kind === 'layout' ? { placements: value.placements, area } : null);
       } catch {
         if (!cancelled) setGuide(null); // half-wired or GPU-dependent chain — no guide
       }
@@ -287,7 +303,19 @@ export default function App() {
     c.strokeStyle = '#ff1493'; // layout socket color
     c.fillStyle = '#ff1493';
     c.lineWidth = Math.max(1, width / 512);
-    for (const p of guide) {
+    if (guide.area) {
+      // the generator's coverage rect, dashed so it reads as a bound, not a cell
+      c.save();
+      c.setLineDash([c.lineWidth * 6, c.lineWidth * 4]);
+      c.strokeRect(
+        width / 2 - guide.area.width / 2,
+        height / 2 - guide.area.height / 2,
+        guide.area.width,
+        guide.area.height,
+      );
+      c.restore();
+    }
+    for (const p of guide.placements) {
       const x = width / 2 + p.x;
       const y = height / 2 + p.y;
       if (p.w != null && p.h != null) {
@@ -324,6 +352,7 @@ export default function App() {
     <div className="app">
       <div className="editor">
         <NodeEditor />
+        <LayersPanel />
       </div>
       <div className="viewport">
         <div className="frame-config">
@@ -396,7 +425,6 @@ export default function App() {
               <canvas ref={canvasRef} />
               {guide && <canvas ref={guideRef} className="guide-overlay" />}
               {pending && <div className="cook-pending" role="status" aria-label="rendering" />}
-              <LayersPanel />
             </>
           )}
         </div>

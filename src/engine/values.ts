@@ -22,6 +22,9 @@ export type StrokeAlign = 'center' | 'inside' | 'outside';
 
 export interface Style {
   fill: string; // '#rrggbb'
+  /** false turns the fill paint off (stroke-only shape); absent reads as true.
+   * grow rides on the fill ink, so it is skipped too when the fill is off. */
+  fillEnabled?: boolean;
   stroke: string; // '#rrggbb' — drawn only when strokeWidth > 0
   strokeWidth: number; // px — 0 means the stroke is off
   strokeAlign: StrokeAlign;

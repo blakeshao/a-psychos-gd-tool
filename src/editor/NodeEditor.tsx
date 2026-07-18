@@ -1,12 +1,18 @@
 // The node canvas. xyflow renders the document graph; every edit (drag,
 // wire, delete) flows back through store actions. wireIsValid gives live
 // red/green feedback while dragging a connection.
+//
+// Figma-style pointer scheme: left-drag draws a marquee that selects every
+// node it touches (⌘/shift-click adds to the selection); pan with a
+// two-finger trackpad scroll, space+drag, or the middle/right button; pinch
+// zooms. Selected nodes move and delete as a group.
 
 import { useCallback, useEffect, useMemo } from 'react';
 import {
   Background,
   Panel,
   ReactFlow,
+  SelectionMode,
   useReactFlow,
   useStoreApi,
   type Connection,
@@ -42,7 +48,7 @@ const WIRE_COLORS: Record<SocketType, string> = {
 
 export function NodeEditor() {
   const graph = useApp(selectActiveGraph);
-  const selectedNodeId = useApp((s) => s.selectedNodeId);
+  const selectedNodeIds = useApp((s) => s.selectedNodeIds);
 
   const nodes: FlowNode[] = useMemo(
     () =>
@@ -51,9 +57,9 @@ export function NodeEditor() {
         type: 'gfx',
         position: n.position ?? { x: 0, y: 0 },
         data: {},
-        selected: n.id === selectedNodeId,
+        selected: selectedNodeIds.includes(n.id),
       })),
-    [graph.nodes, selectedNodeId],
+    [graph.nodes, selectedNodeIds],
   );
 
   const edges: FlowEdge[] = useMemo(
@@ -75,20 +81,27 @@ export function NodeEditor() {
   );
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const { moveNode, removeNodes, select, selectedNodeId: selected } = useApp.getState();
+    const { moveNodes, removeNodes, select, selectedNodeIds: selected } = useApp.getState();
+    const moved: Record<string, { x: number; y: number }> = {};
+    const selectChanges = new Map<string, boolean>();
     const removed: string[] = [];
     let dragEnded = false;
     for (const c of changes) {
       if (c.type === 'position') {
-        if (c.position) moveNode(c.id, c.position);
+        // a group drag emits one change per node in the same batch — collect
+        // them so the whole set moves in a single store update / undo step
+        if (c.position) moved[c.id] = c.position;
         if (c.dragging === false) dragEnded = true;
       } else if (c.type === 'remove') removed.push(c.id);
-      else if (c.type === 'select') {
-        if (c.selected) select(c.id);
-        else if (selected === c.id) select(null);
-      }
+      else if (c.type === 'select') selectChanges.set(c.id, c.selected);
     }
+    if (Object.keys(moved).length) moveNodes(moved);
     if (removed.length) removeNodes(removed);
+    if (selectChanges.size) {
+      const next = selected.filter((id) => selectChanges.get(id) !== false);
+      for (const [id, on] of selectChanges) if (on && !next.includes(id)) next.push(id);
+      select(next);
+    }
     // the drop lands inside the drag's undo step; the next drag is its own
     if (dragEnded) endGesture();
   }, []);
@@ -143,6 +156,14 @@ export function NodeEditor() {
       onConnect={onConnect}
       isValidConnection={isValidConnection}
       deleteKeyCode={['Backspace', 'Delete']}
+      // left-drag draws the selection marquee; panning lives on two-finger
+      // scroll, held space + drag, and the middle/right button; pinch zooms
+      selectionOnDrag
+      selectionMode={SelectionMode.Partial}
+      multiSelectionKeyCode={['Meta', 'Shift']}
+      panOnDrag={[1, 2]}
+      panOnScroll
+      panActivationKeyCode="Space"
       minZoom={0.1}
       fitView
       proOptions={{ hideAttribution: true }}
