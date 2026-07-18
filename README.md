@@ -121,13 +121,23 @@ Both default to `http://localhost:5199/` (pass your dev server's URL) and locate
 
 ## Roadmap
 
+### Done
+
 1. ~~Engine spine + Text→Output slice~~
 2. ~~Node editor wired to the engine; type-checking on drag~~
 3. ~~Raster breadth: Noise, Dither, Recolor, Chroma Key, ASCII, To Alpha, Composite~~
 4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ (vector Slice deferred)
 5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (~~Alpha Map~~ landed as the generators' mask input)
-6. Async model nodes (Extract Subject/Objects/Edges via ONNX Runtime Web)
-7. Persistence, ~export~, ~~undo~~
+6. ~~Export & undo/redo~~
+
+### Planned
+
+- **Async model nodes** — Extract Subject/Objects/Edges via ONNX Runtime Web.
+- **Persistence** — save/load documents.
+- **Export to Adobe Illustrator** — `.ai`/SVG export that round-trips vectors as editable paths.
+- **Cropping** — crop node for raster and frame content.
+- **More ops nodes** — additional vector, raster, and text operations.
+- **Elements ops** — nodes that manipulate one or more placed elements.
 
 ## Contributing
 
