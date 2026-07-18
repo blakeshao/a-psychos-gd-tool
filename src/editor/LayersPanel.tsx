@@ -1,4 +1,4 @@
-// The layer stack, floating over the viewport. Rows run top layer first
+// The layer stack, floating over the node editor. Rows run top layer first
 // (paint order reversed, like every layer panel); clicking a row points the
 // node editor at that layer's graph, dragging a row reorders the stack. The
 // header edits the active layer's blend mode and opacity, and collapses the

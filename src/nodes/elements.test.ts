@@ -788,7 +788,7 @@ describe('Style', () => {
       ctx,
     )).out as VectorValue;
     expect(styled.style).toEqual({
-      fill: '#20a040', stroke: '#e020c0', strokeWidth: 10, strokeAlign: 'inside', grow: 0,
+      fill: '#20a040', fillEnabled: true, stroke: '#e020c0', strokeWidth: 10, strokeAlign: 'inside', grow: 0,
     });
 
     // stroke toggle off: the width folds to 0 even though a width is set
@@ -799,10 +799,19 @@ describe('Style', () => {
     )).out as VectorValue;
     expect(off.style?.strokeWidth).toBe(0);
 
+    // fill toggle off: the flag rides on the style; the color stays for grow/stroke reuse
+    const unfilled = (await ShapeNode.cook(
+      {},
+      { kind: 'rect', width: 10, height: 10, sides: 6, filled: false, fill: '#20a040' },
+      ctx,
+    )).out as VectorValue;
+    expect(unfilled.style?.fillEnabled).toBe(false);
+    expect(unfilled.style?.fill).toBe('#20a040');
+
     const bare = (await ShapeNode.cook({}, { kind: 'rect', width: 10, height: 10, sides: 6 }, ctx))
       .out as VectorValue;
     expect(bare.style).toEqual({
-      fill: '#000000', stroke: '#000000', strokeWidth: 0, strokeAlign: 'center', grow: 0,
+      fill: '#000000', fillEnabled: true, stroke: '#000000', strokeWidth: 0, strokeAlign: 'center', grow: 0,
     });
   });
 });

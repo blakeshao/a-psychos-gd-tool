@@ -19,6 +19,7 @@ import {
   type ParamValue,
 } from './engine/graph';
 import { canConnect } from './engine/registry';
+import { factoryDoc } from './factoryDoc';
 import { registry } from './nodes';
 import { extractFace, faceCount } from './util/sfnt';
 
@@ -66,62 +67,8 @@ function makeLayer(id: string, name: string, graph: Graph): Layer {
   return { id, name, visible: true, opacity: 1, blendMode: 'normal', graph };
 }
 
-const factoryGraph: Graph = {
-  frame: { width: 2304, height: 3456 },
-  nodes: {
-    text1: {
-      id: 'text1',
-      type: 'Text',
-      params: {
-        content: 'PSYCHO', fontSize: 400, font: 'default', fill: '#ffffff', weight: 400,
-        stroke: true, strokeColor: '#00b395', strokeWidth: 45, strokeAlign: 'outside',
-      },
-      position: { x: -131, y: 68 },
-    },
-    outline1: { id: 'outline1', type: 'Outline', params: {}, position: { x: 124, y: 74 } },
-    displace_3: { id: 'displace_3', type: 'Displace', params: { amount: 31.5, scale: 357, seed: 0 }, position: { x: 374, y: 58 } },
-    raster1: { id: 'raster1', type: 'Rasterize', params: {}, position: { x: 636, y: 73 } },
-    blur1: { id: 'blur1', type: 'Blur', params: { radius: 0 }, position: { x: 891, y: 45 } },
-    duplicator_1: { id: 'duplicator_1', type: 'Duplicator', params: { count: 499 }, position: { x: 1179, y: 78 } },
-    grid_3: {
-      id: 'grid_3',
-      type: 'Grid',
-      params: {
-        columns: 63, rows: 4, gapX: 0, gapY: 0,
-        padding: 'x/y', padX: 370, padY: 217, padTop: 48, padRight: 48, padBottom: 48, padLeft: 48,
-        distX: 'golden', distY: 'golden', ratioX: 1.618, ratioY: 1.618,
-        weightsX: '1,1,2,3,5', weightsY: '1,1,2,3,5', exprX: '', exprY: '1 + sin(t*pi)',
-        reverseX: 'yes', reverseY: 'yes', stagger: 'none', flow: 'rows',
-      },
-      position: { x: 828, y: 288 },
-    },
-    weight_4: { id: 'weight_4', type: 'Weight', params: { source: 'area', seed: 1, expr: '1 - progress' }, position: { x: 1147, y: 249 } },
-    place_4: {
-      id: 'place_4',
-      type: 'Place',
-      params: {
-        distribute: 'spread', offsetX: 167, offsetY: -20, order: 'source', reverse: 'yes', seed: 0,
-        binds: '[{"channel":"area","target":"scale","amount":0.88,"invert":false,"offset":0},{"channel":"area","target":"rotation","amount":1,"invert":false,"offset":-0.34}]',
-      },
-      position: { x: 1438, y: 127 },
-    },
-    out: { id: 'out', type: 'Output', params: { background: '#7300a8' }, position: { x: 1794, y: 290 } },
-  },
-  edges: [
-    { from: { node: 'text1', socket: 'out' }, to: { node: 'outline1', socket: 'text' } },
-    { from: { node: 'outline1', socket: 'out' }, to: { node: 'displace_3', socket: 'in' } },
-    { from: { node: 'displace_3', socket: 'out' }, to: { node: 'raster1', socket: 'vector' } },
-    { from: { node: 'raster1', socket: 'out' }, to: { node: 'blur1', socket: 'in' } },
-    { from: { node: 'blur1', socket: 'out' }, to: { node: 'duplicator_1', socket: 'in' } },
-    { from: { node: 'grid_3', socket: 'out' }, to: { node: 'weight_4', socket: 'layout' } },
-    { from: { node: 'duplicator_1', socket: 'out' }, to: { node: 'place_4', socket: 'elements' } },
-    { from: { node: 'weight_4', socket: 'out' }, to: { node: 'place_4', socket: 'layout' } },
-    { from: { node: 'place_4', socket: 'out' }, to: { node: 'out', socket: 'in' } },
-  ],
-};
-
 // The working document persists to localStorage on every edit, so the current
-// set-up IS the default on next load. The factory graph is only the first-run
+// set-up IS the default on next load. The factory document is only the first-run
 // (or unreadable-save) fallback. v1 saves held a single graph — they load as
 // a one-layer document; v1 is left in place so older builds can still read it.
 const STORAGE_KEY = 'gfx.document.v2';
@@ -168,10 +115,7 @@ function loadSavedDoc(): Doc | null {
   }
 }
 
-const initialDoc: Doc = loadSavedDoc() ?? {
-  frame: factoryGraph.frame ?? DEFAULT_FRAME,
-  layers: [makeLayer('layer_1', 'Layer 1', factoryGraph)],
-};
+const initialDoc: Doc = loadSavedDoc() ?? factoryDoc;
 
 export interface WireSpec {
   source: NodeId;
@@ -211,7 +155,8 @@ interface AppStore {
   doc: Doc;
   /** the layer whose graph the node editor shows and edits — always a live id */
   activeLayerId: string;
-  selectedNodeId: NodeId | null;
+  /** the selected nodes, in selection order — one entry for a plain click, many for a marquee */
+  selectedNodeIds: NodeId[];
   /** undo/redo stacks of document snapshots — selection and fonts stay out of history */
   past: Doc[];
   future: Doc[];
@@ -221,10 +166,11 @@ interface AppStore {
   fonts: Record<string, Font>;
   /** family names of the user's local fonts, available to load on demand */
   localFonts: string[];
-  select: (id: NodeId | null) => void;
+  select: (ids: NodeId[]) => void;
   setFrame: (frame: Frame) => void;
   setParam: (nodeId: NodeId, name: string, value: ParamValue) => void;
-  moveNode: (nodeId: NodeId, position: { x: number; y: number }) => void;
+  /** one call moves the whole dragged set, so a group drag is a single undo step */
+  moveNodes: (positions: Record<NodeId, { x: number; y: number }>) => void;
   addNode: (type: string, position: { x: number; y: number }) => void;
   removeNodes: (ids: NodeId[]) => void;
   connect: (w: WireSpec) => void;
@@ -260,11 +206,11 @@ function editActiveGraph(s: AppStore, fn: (g: Graph) => Graph): Doc {
 }
 
 /** After swapping in a document (undo/redo), keep active layer + selection pointing at things that exist. */
-function revalidate(s: AppStore, doc: Doc): Pick<AppStore, 'activeLayerId' | 'selectedNodeId'> {
+function revalidate(s: AppStore, doc: Doc): Pick<AppStore, 'activeLayerId' | 'selectedNodeIds'> {
   const layer = doc.layers.find((l) => l.id === s.activeLayerId) ?? doc.layers[doc.layers.length - 1];
   return {
     activeLayerId: layer.id,
-    selectedNodeId: s.selectedNodeId && layer.graph.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+    selectedNodeIds: s.selectedNodeIds.filter((id) => layer.graph.nodes[id]),
   };
 }
 
@@ -287,13 +233,13 @@ function pushHistory(s: AppStore, key: string | null): Pick<AppStore, 'past' | '
 export const useApp = create<AppStore>((set, get) => ({
   doc: initialDoc,
   activeLayerId: initialDoc.layers[initialDoc.layers.length - 1].id,
-  selectedNodeId: null,
+  selectedNodeIds: [],
   past: [],
   future: [],
   fonts: {},
   localFonts: [],
 
-  select: (id) => set({ selectedNodeId: id }),
+  select: (ids) => set({ selectedNodeIds: ids }),
 
   undo: () =>
     set((s) => {
@@ -342,11 +288,21 @@ export const useApp = create<AppStore>((set, get) => ({
       })),
     })),
 
-  moveNode: (nodeId, position) =>
-    set((s) => ({
-      ...pushHistory(s, `move:${s.activeLayerId}:${nodeId}`),
-      doc: editActiveGraph(s, (g) => ({ ...g, nodes: { ...g.nodes, [nodeId]: { ...g.nodes[nodeId], position } } })),
-    })),
+  moveNodes: (positions) =>
+    set((s) => {
+      const ids = Object.keys(positions);
+      if (!ids.length) return s;
+      // the dragged set is stable for the whole gesture, so keying on it
+      // coalesces every step of a group drag into one undo snapshot
+      return {
+        ...pushHistory(s, `move:${s.activeLayerId}:${ids.sort().join(',')}`),
+        doc: editActiveGraph(s, (g) => {
+          const nodes = { ...g.nodes };
+          for (const id of ids) if (nodes[id]) nodes[id] = { ...nodes[id], position: positions[id] };
+          return { ...g, nodes };
+        }),
+      };
+    }),
 
   addNode: (type, position) =>
     set((s) => {
@@ -359,7 +315,7 @@ export const useApp = create<AppStore>((set, get) => ({
       return {
         ...pushHistory(s, null),
         doc: editActiveGraph(s, (g) => ({ ...g, nodes: { ...g.nodes, [id]: { id, type, params, position } } })),
-        selectedNodeId: id,
+        selectedNodeIds: [id],
       };
     }),
 
@@ -373,7 +329,7 @@ export const useApp = create<AppStore>((set, get) => ({
           nodes: Object.fromEntries(Object.entries(g.nodes).filter(([id]) => !drop.has(id))),
           edges: g.edges.filter((e) => !drop.has(e.from.node) && !drop.has(e.to.node)),
         })),
-        selectedNodeId: s.selectedNodeId && drop.has(s.selectedNodeId) ? null : s.selectedNodeId,
+        selectedNodeIds: s.selectedNodeIds.filter((id) => !drop.has(id)),
       };
     }),
 
@@ -406,7 +362,7 @@ export const useApp = create<AppStore>((set, get) => ({
     set((s) => {
       if (s.activeLayerId === id || !s.doc.layers.some((l) => l.id === id)) return s;
       // switching layers is a view change, not a document edit — no history
-      return { activeLayerId: id, selectedNodeId: null };
+      return { activeLayerId: id, selectedNodeIds: [] };
     }),
 
   addLayer: () =>
@@ -425,7 +381,7 @@ export const useApp = create<AppStore>((set, get) => ({
         ...pushHistory(s, null),
         doc: { ...s.doc, layers },
         activeLayerId: id,
-        selectedNodeId: null,
+        selectedNodeIds: [],
       };
     }),
 
@@ -440,7 +396,7 @@ export const useApp = create<AppStore>((set, get) => ({
         ...pushHistory(s, null),
         doc: { ...s.doc, layers },
         activeLayerId: active,
-        selectedNodeId: s.activeLayerId === id ? null : s.selectedNodeId,
+        selectedNodeIds: s.activeLayerId === id ? [] : s.selectedNodeIds,
       };
     }),
 

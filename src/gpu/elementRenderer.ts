@@ -5,7 +5,7 @@
 
 import type { Font } from 'opentype.js';
 import type { Element, PathCmd } from '../engine/values';
-import { appendPath, paintPath } from './paint';
+import { appendPath, paintErases, paintPath } from './paint';
 import type { GpuContext } from './device';
 import type { PooledTexture } from './pool';
 
@@ -60,9 +60,10 @@ export function renderElements(
       continue;
     }
 
-    // an eroding draw (grow < 0) erases through everything under it on the
-    // shared layer — give it a fresh one and flush it out right after
-    const erodes = (el.content.style?.grow ?? 0) < 0;
+    // an erasing draw (grow < 0, or an unfilled outside stroke) punches through
+    // everything under it on the shared layer — give it a fresh one and flush
+    // it out right after
+    const erodes = paintErases(el.content.style);
     if (erodes) flush();
     if (!canvas) {
       canvas = new OffscreenCanvas(width, height);
@@ -91,5 +92,11 @@ export function renderElements(
     if (erodes) flush();
   }
   flush();
-  return dst;
+  // drawQuad accumulates premultiplied (soft edges over transparency would
+  // otherwise darken toward black) — convert back to the straight-alpha
+  // convention every downstream pass expects
+  const out = gpu.pool.acquire(width, height);
+  gpu.runPass('unpremul', dst, out);
+  gpu.pool.release(dst);
+  return out;
 }

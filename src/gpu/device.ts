@@ -16,6 +16,7 @@ import {
   QUAD_SHADER,
   RECOLOR_FS,
   TO_ALPHA_FS,
+  UNPREMULTIPLY_FS,
 } from './shaders';
 import { TexturePool, type PooledTexture } from './pool';
 
@@ -29,6 +30,7 @@ const FRAGMENTS: Record<string, string> = {
   toalpha: TO_ALPHA_FS,
   composite: COMPOSITE_FS,
   layerblend: LAYER_BLEND_FS,
+  unpremul: UNPREMULTIPLY_FS,
 };
 
 /** Pass sources are pooled render targets or persistent textures (atlas, white). */
@@ -132,6 +134,10 @@ export class GpuContext {
    * Draw a textured quad over dst (contents preserved, src-over blending).
    * coeffs: [a, b, c, d, tx, ty, w, h] — clip = [a b; c d]·local_px + [tx ty],
    * local_px spanning the content size (w, h).
+   *
+   * src is straight alpha; dst accumulates PREMULTIPLIED. Run an 'unpremul'
+   * pass over dst after the last quad before handing it to any straight-alpha
+   * consumer.
    */
   drawQuad(src: TexSource, dst: PooledTexture, coeffs: Float32Array<ArrayBuffer>) {
     // render through the sRGB view: dst bytes stay sRGB-encoded, but the
@@ -151,8 +157,13 @@ export class GpuContext {
           entryPoint: 'fs',
           targets: [{
             format: viewFormat,
+            // premultiplied src-over: the shader multiplies rgb by alpha, so
+            // the accumulated dst is premultiplied — exact over transparent
+            // pixels, where straight src-alpha blending would darken soft
+            // edges (it can't divide by the result alpha). Callers
+            // un-premultiply once when the accumulation is done.
             blend: {
-              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
               alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
             },
           }],
@@ -168,7 +179,7 @@ export class GpuContext {
     const bindGroup = this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: this.sampler },
+        // no sampler — the quad shader filters manually via textureLoad
         { binding: 1, resource: viewOf(src) },
         { binding: 2, resource: { buffer: this.uniforms } },
       ],

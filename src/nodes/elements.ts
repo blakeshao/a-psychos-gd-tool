@@ -108,7 +108,7 @@ export const DuplicatorNode: NodeDef = {
   type: 'Duplicator',
   inputs: [{ name: 'in', type: ['vector', 'raster', 'text', 'elements'] }],
   outputs: [{ name: 'out', type: 'elements' }],
-  params: [{ name: 'count', kind: 'number', default: 12, min: 1, max: 500, step: 1 }],
+  params: [{ name: 'count', kind: 'number', default: 12, min: 1, max: 1000, step: 1 }],
   cook(inputs, params) {
     const base = asElements(inputs.in as Value);
     const count = Math.round(Number(params.count));

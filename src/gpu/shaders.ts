@@ -197,7 +197,8 @@ struct QuadU {
   txty: vec2f,
   size: vec2f, // content size in px
 }
-@group(0) @binding(0) var samp: sampler;
+// no sampler: filtering is manual (texelPremul) — layout:'auto' would strip
+// an unused sampler binding, so none is declared or bound
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> u: QuadU;
 
@@ -231,13 +232,64 @@ fn qsrgb2lin(c: vec3f) -> vec3f {
   return select(hi, lo, c <= vec3f(0.04045));
 }
 
+// one texel, premultiplied in linear light (clamp replicates the edge,
+// matching clamp-to-edge addressing)
+fn texelPremul(p: vec2i, dims: vec2i) -> vec4f {
+  let t = textureLoad(tex, clamp(p, vec2i(0), dims - 1), 0);
+  return vec4f(qsrgb2lin(t.rgb) * t.a, t.a);
+}
+
 @fragment
 fn fs(in: QVSOut) -> @location(0) vec4f {
-  let c = textureSample(tex, samp, in.uv);
+  // manual bilinear in premultiplied linear light: hardware filtering runs
+  // on the straight-alpha bytes, mixing the black rgb of fully transparent
+  // texels into every scaled/rotated edge — a dark rim around soft shapes.
+  // Premultiplying each texel first keeps invisible texels weightless.
+  let dims = vec2i(textureDimensions(tex));
+  let st = in.uv * vec2f(dims) - 0.5;
+  let base = vec2i(floor(st));
+  let f = fract(st);
+  let c = mix(
+    mix(texelPremul(base, dims), texelPremul(base + vec2i(1, 0), dims), f.x),
+    mix(texelPremul(base + vec2i(0, 1), dims), texelPremul(base + vec2i(1, 1), dims), f.x),
+    f.y);
   // the target view is sRGB: emit linear, the hardware re-encodes on store.
   // src-over then blends in linear light — blending gamma bytes darkens
   // every soft edge (blur halos, antialiasing) against the paper.
-  return vec4f(qsrgb2lin(c.rgb), c.a);
+  // premultiplied out (blend factors one / one-minus-src-alpha): straight
+  // src-over onto a transparent dst can't divide by the result alpha in
+  // fixed function, so soft edges would land darkened — a black rim around
+  // white text on a transparent layer. The element pass accumulates
+  // premultiplied instead and un-premultiplies once at the end (UNPREMULTIPLY_FS).
+  return c;
+}
+`;
+
+// Back to straight alpha after the element pass — every other pass reads
+// straight. Opaque and empty pixels pass through untouched so they round-trip
+// byte-identical (the divide only ever touches soft edges).
+export const UNPREMULTIPLY_FS = /* wgsl */ `
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+
+fn usrgb2lin(c: vec3f) -> vec3f {
+  let lo = c / 12.92;
+  let hi = pow((c + vec3f(0.055)) / 1.055, vec3f(2.4));
+  return select(hi, lo, c <= vec3f(0.04045));
+}
+fn ulin2srgb(c: vec3f) -> vec3f {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(max(c, vec3f(0.0)), vec3f(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3f(0.0031308));
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  let c = textureSample(tex, samp, in.uv);
+  if (c.a <= 0.0) { return vec4f(0.0); }
+  if (c.a >= 1.0) { return c; }
+  let lin = min(usrgb2lin(c.rgb) / c.a, vec3f(1.0));
+  return vec4f(ulin2srgb(lin), c.a);
 }
 `;
 
@@ -268,8 +320,12 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     default { blended = o.rgb; }                                         // normal
   }
   let a = o.a * u.opacity * m;
-  // src-over alpha so drawing onto a transparent base still registers
-  return vec4f(mix(b.rgb, blended, a), a + b.a * (1.0 - a));
+  // straight-alpha src-over (blend only where the base exists): a plain
+  // mix(b.rgb, blended, a) reads transparent-base rgb as black and darkens
+  // soft edges — the un-premultiply by the result alpha keeps them clean
+  let ao = a + b.a * (1.0 - a);
+  let co = a * (1.0 - b.a) * o.rgb + a * b.a * blended + (1.0 - a) * b.a * b.rgb;
+  return vec4f(co / max(ao, 1e-5), ao);
 }
 `;
 
