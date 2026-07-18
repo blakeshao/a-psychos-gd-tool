@@ -9,7 +9,7 @@ import type { ParamValue } from '../engine/graph';
 import type { SocketType } from '../engine/values';
 import { registry } from '../nodes';
 import { BIND_TARGETS, parseBinds, type BindSpec } from '../nodes/elements';
-import { endGesture, localFontsSupported, useApp } from '../store';
+import { endGesture, localFontsSupported, selectActiveGraph, useApp } from '../store';
 
 // Type ladder colors — a bright 2000s computer palette, one unique hue per type,
 // matching the wire colors. Sockets (the circles) and the wires that leave them
@@ -34,7 +34,7 @@ function socketTitle(spec: SocketSpec): string {
 }
 
 export function GfxNode({ id }: NodeProps) {
-  const node = useApp((s) => s.graph.nodes[id]);
+  const node = useApp((s) => selectActiveGraph(s).nodes[id]);
   const setParam = useApp((s) => s.setParam);
   if (!node) return null;
   const def = registry.get(node.type);
@@ -186,10 +186,11 @@ function NodeParam({
   );
 }
 
-// What a channel consumer can read: the built-ins + whatever this document's
+// What a channel consumer can read: the built-ins + whatever this layer's
 // Weights write — channels are named after their Weight node's source.
+// Channels live on wires, so only the active layer's graph is in scope.
 function useDocChannels(): string[] {
-  const nodes = useApp((s) => s.graph.nodes);
+  const nodes = useApp((s) => selectActiveGraph(s).nodes);
   const channels = ['weight', 'progress'];
   for (const n of Object.values(nodes)) {
     if (n.type !== 'Weight') continue;
@@ -414,7 +415,8 @@ type NumberSpec = Extract<ParamSpec, { kind: 'number' }>;
 
 // Blender-style number field: drag horizontally to scrub the value, click the
 // ‹ › arrows to step, or click the field to type an exact value.
-function NumberDrag({
+// Also used by the layers panel for opacity, so all numeric controls match.
+export function NumberDrag({
   spec,
   value,
   onChange,

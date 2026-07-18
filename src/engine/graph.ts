@@ -31,6 +31,42 @@ export interface Graph {
   frame?: Frame;
 }
 
+/**
+ * How a layer's pixels combine with everything below it. Grouped the way
+ * layer panels traditionally do; the flat BLEND_MODES order is the shader's
+ * mode index, so entries must never be reordered — only appended.
+ */
+export const BLEND_MODE_GROUPS: { group: string; modes: string[] }[] = [
+  { group: 'normal', modes: ['normal'] },
+  { group: 'darken', modes: ['darken', 'multiply', 'color-burn', 'linear-burn', 'darker-color'] },
+  { group: 'lighten', modes: ['lighten', 'screen', 'color-dodge', 'linear-dodge', 'lighter-color'] },
+  { group: 'contrast', modes: ['overlay', 'soft-light', 'hard-light', 'vivid-light', 'linear-light', 'pin-light', 'hard-mix'] },
+  { group: 'comparative', modes: ['difference', 'exclusion', 'subtract', 'divide'] },
+  { group: 'component', modes: ['hue', 'saturation', 'color', 'luminosity'] },
+];
+
+export const BLEND_MODES = BLEND_MODE_GROUPS.flatMap((g) => g.modes);
+
+export type BlendMode = (typeof BLEND_MODES)[number];
+
+/** A layer: one full node graph plus how its result composites into the stack. */
+export interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  /** 0..1 — multiplies the layer's own alpha at composite time */
+  opacity: number;
+  blendMode: BlendMode;
+  graph: Graph;
+}
+
+/** The document: an ordered stack of layers over one frame. Index 0 is the
+ * bottom layer; painting walks the array in order. */
+export interface Doc {
+  frame: Frame;
+  layers: Layer[];
+}
+
 /** Is `to` reachable downstream of `from`? Used to reject wires that would create a cycle. */
 export function hasPath(graph: Graph, from: NodeId, to: NodeId): boolean {
   if (from === to) return true;

@@ -21,13 +21,19 @@ fn vs(@builtin(vertex_index) i: u32) -> VSOut {
 
 // NOTE: no uniform binding here — layout:'auto' strips unused bindings, and a
 // bind group entry for a stripped binding is a validation error.
+// Present-only pass: transparency shows over a checkerboard in the viewport;
+// PNG export reads the texture back directly and keeps real alpha.
 export const BLIT_FS = /* wgsl */ `
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
-  return textureSample(tex, samp, in.uv);
+  let c = textureSample(tex, samp, in.uv);
+  let cell = f32(textureDimensions(tex).x) / 40.0;
+  let odd = (floor(in.pos.x / cell) + floor(in.pos.y / cell)) % 2.0;
+  let checker = select(vec3f(0.92), vec3f(0.80), odd == 1.0);
+  return vec4f(mix(checker, c.rgb, c.a), 1.0);
 }
 `;
 
@@ -264,5 +270,115 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let a = o.a * u.opacity * m;
   // src-over alpha so drawing onto a transparent base still registers
   return vec4f(mix(b.rgb, blended, a), a + b.a * (1.0 - a));
+}
+`;
+
+// Layer compositing: one layer blended onto the stack below it, per the W3C
+// compositing spec (the Photoshop set — separable modes plus the HSL family).
+// mode indexes BLEND_MODES in engine/graph.ts; opacity scales the layer's own
+// alpha. Straight alpha in, straight alpha out; blending runs on the encoded
+// sRGB values, matching CSS mix-blend-mode and the Composite node.
+export const LAYER_BLEND_FS = /* wgsl */ `
+struct LayerU { mode: f32, opacity: f32, _p2: f32, _p3: f32 }
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var below: texture_2d<f32>;
+@group(0) @binding(2) var layer: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> u: LayerU;
+
+// spec luma weights (compositing-1 uses 0.3/0.59/0.11, not Rec. 709)
+fn lum3(c: vec3f) -> f32 { return dot(c, vec3f(0.3, 0.59, 0.11)); }
+
+fn clipColor(c0: vec3f) -> vec3f {
+  let l = lum3(c0);
+  let n = min(c0.r, min(c0.g, c0.b));
+  let x = max(c0.r, max(c0.g, c0.b));
+  var c = c0;
+  if (n < 0.0) { c = vec3f(l) + (c - vec3f(l)) * l / max(l - n, 1e-6); }
+  if (x > 1.0) { c = vec3f(l) + (c - vec3f(l)) * (1.0 - l) / max(x - l, 1e-6); }
+  return c;
+}
+fn setLum(c: vec3f, l: f32) -> vec3f { return clipColor(c + vec3f(l - lum3(c))); }
+fn sat3(c: vec3f) -> f32 {
+  return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+}
+fn setSat(c: vec3f, s: f32) -> vec3f {
+  let mn = min(c.r, min(c.g, c.b));
+  let mx = max(c.r, max(c.g, c.b));
+  if (mx <= mn) { return vec3f(0.0); }
+  return (c - vec3f(mn)) * s / (mx - mn);
+}
+
+// componentwise modes with per-channel edge cases (spec order matters:
+// dodge checks Cb==0 first, burn checks Cb==1 first)
+fn colorDodge3(b: vec3f, s: vec3f) -> vec3f {
+  var r = min(vec3f(1.0), b / max(1.0 - s, vec3f(1e-6)));
+  r = select(r, vec3f(1.0), s >= vec3f(1.0));
+  return select(r, vec3f(0.0), b <= vec3f(0.0));
+}
+fn colorBurn3(b: vec3f, s: vec3f) -> vec3f {
+  var r = 1.0 - min(vec3f(1.0), (1.0 - b) / max(s, vec3f(1e-6)));
+  r = select(r, vec3f(0.0), s <= vec3f(0.0));
+  return select(r, vec3f(1.0), b >= vec3f(1.0));
+}
+fn hardLight3(b: vec3f, s: vec3f) -> vec3f {
+  return select(
+    1.0 - 2.0 * (1.0 - b) * (1.0 - s),
+    2.0 * b * s,
+    s <= vec3f(0.5));
+}
+fn softLight3(b: vec3f, s: vec3f) -> vec3f {
+  let d = select(sqrt(b), ((16.0 * b - 12.0) * b + 4.0) * b, b <= vec3f(0.25));
+  return select(
+    b + (2.0 * s - 1.0) * (d - b),
+    b - (1.0 - 2.0 * s) * b * (1.0 - b),
+    s <= vec3f(0.5));
+}
+
+fn blendPx(mode: u32, b: vec3f, s: vec3f) -> vec3f {
+  switch (mode) {
+    case 1u { return min(b, s); }                                          // darken
+    case 2u { return b * s; }                                              // multiply
+    case 3u { return colorBurn3(b, s); }                                   // color burn
+    case 4u { return max(vec3f(0.0), b + s - 1.0); }                       // linear burn
+    case 5u { return select(s, b, lum3(b) < lum3(s)); }                    // darker color
+    case 6u { return max(b, s); }                                          // lighten
+    case 7u { return b + s - b * s; }                                      // screen
+    case 8u { return colorDodge3(b, s); }                                  // color dodge
+    case 9u { return min(vec3f(1.0), b + s); }                             // linear dodge (add)
+    case 10u { return select(s, b, lum3(b) > lum3(s)); }                   // lighter color
+    case 11u { return hardLight3(s, b); }                                  // overlay (hard light, swapped)
+    case 12u { return softLight3(b, s); }                                  // soft light
+    case 13u { return hardLight3(b, s); }                                  // hard light
+    case 14u {                                                             // vivid light
+      return select(colorDodge3(b, 2.0 * s - 1.0), colorBurn3(b, 2.0 * s), s <= vec3f(0.5));
+    }
+    case 15u { return clamp(b + 2.0 * s - 1.0, vec3f(0.0), vec3f(1.0)); }  // linear light
+    case 16u { return select(max(b, 2.0 * s - 1.0), min(b, 2.0 * s), s <= vec3f(0.5)); } // pin light
+    case 17u { return step(vec3f(1.0), b + s); }                           // hard mix
+    case 18u { return abs(b - s); }                                        // difference
+    case 19u { return b + s - 2.0 * b * s; }                               // exclusion
+    case 20u { return max(vec3f(0.0), b - s); }                            // subtract
+    case 21u {                                                             // divide
+      return select(min(vec3f(1.0), b / max(s, vec3f(1e-6))), vec3f(1.0), s <= vec3f(0.0));
+    }
+    case 22u { return setLum(setSat(s, sat3(b)), lum3(b)); }               // hue
+    case 23u { return setLum(setSat(b, sat3(s)), lum3(b)); }               // saturation
+    case 24u { return setLum(s, lum3(b)); }                                // color
+    case 25u { return setLum(b, lum3(s)); }                                // luminosity
+    default { return s; }                                                  // normal
+  }
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  let b = textureSample(below, samp, in.uv);
+  let s = textureSample(layer, samp, in.uv);
+  let sa = s.a * u.opacity;
+  let ba = b.a;
+  let mixed = blendPx(u32(u.mode), b.rgb, s.rgb);
+  // blend only where the backdrop exists; plain source over transparency
+  let co = sa * (1.0 - ba) * s.rgb + sa * ba * mixed + (1.0 - sa) * ba * b.rgb;
+  let ao = sa + ba * (1.0 - sa);
+  return vec4f(co / max(ao, 1e-5), ao);
 }
 `;

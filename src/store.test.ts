@@ -1,8 +1,18 @@
 // Wire rules + store actions, headless against the real node registry.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Graph } from './engine/graph';
-import { endGesture, useApp, wireIsValid } from './store';
+import { DEFAULT_FRAME, type Doc, type Graph } from './engine/graph';
+import { endGesture, selectActiveGraph, useApp, wireIsValid } from './store';
+
+/** A one-layer document around `graph` — the pre-layers store shape. */
+function docWith(graph: Graph): Doc {
+  return {
+    frame: DEFAULT_FRAME,
+    layers: [{ id: 'layer_1', name: 'Layer 1', visible: true, opacity: 1, blendMode: 'normal', graph }],
+  };
+}
+
+const activeGraph = () => selectActiveGraph(useApp.getState());
 
 function chain(): Graph {
   return {
@@ -58,32 +68,32 @@ describe('wireIsValid', () => {
 });
 
 describe('store actions', () => {
-  beforeEach(() => useApp.setState({ graph: chain(), selectedNodeId: null }));
+  beforeEach(() => useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null }));
 
   it('connect replaces the existing wire on an input socket', () => {
     useApp.getState().connect({ source: 'raster1', sourceHandle: 'out', target: 'out', targetHandle: 'in' });
-    const edges = useApp.getState().graph.edges;
+    const edges = activeGraph().edges;
     const intoOut = edges.filter((e) => e.to.node === 'out');
     expect(intoOut).toHaveLength(1);
     expect(intoOut[0].from.node).toBe('raster1'); // blur1 -> out was replaced
   });
 
   it('connect silently refuses an invalid wire', () => {
-    const before = useApp.getState().graph.edges.length;
+    const before = activeGraph().edges.length;
     useApp.getState().connect({ source: 'text1', sourceHandle: 'out', target: 'blur1', targetHandle: 'in' });
-    expect(useApp.getState().graph.edges).toHaveLength(before);
+    expect(activeGraph().edges).toHaveLength(before);
   });
 
   it('removeNodes drops the node and all its wires', () => {
     useApp.getState().removeNodes(['blur1']);
-    const g = useApp.getState().graph;
+    const g = activeGraph();
     expect(g.nodes.blur1).toBeUndefined();
     expect(g.edges.some((e) => e.from.node === 'blur1' || e.to.node === 'blur1')).toBe(false);
   });
 
   it('addNode seeds params from the registry defaults', () => {
     useApp.getState().addNode('Blur', { x: 0, y: 0 });
-    const g = useApp.getState().graph;
+    const g = activeGraph();
     const added = Object.values(g.nodes).find((n) => n.type === 'Blur' && n.id !== 'blur1')!;
     expect(added.params.radius).toBe(8);
   });
@@ -91,18 +101,18 @@ describe('store actions', () => {
 
 describe('undo/redo', () => {
   beforeEach(() => {
-    useApp.setState({ graph: chain(), selectedNodeId: null, past: [], future: [] });
+    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null, past: [], future: [] });
     endGesture();
   });
 
   it('undo restores a removed node and its wires; redo removes it again', () => {
     useApp.getState().removeNodes(['blur1']);
     useApp.getState().undo();
-    let g = useApp.getState().graph;
+    let g = activeGraph();
     expect(g.nodes.blur1).toBeDefined();
     expect(g.edges.filter((e) => e.from.node === 'blur1' || e.to.node === 'blur1')).toHaveLength(2);
     useApp.getState().redo();
-    g = useApp.getState().graph;
+    g = activeGraph();
     expect(g.nodes.blur1).toBeUndefined();
   });
 
@@ -121,9 +131,9 @@ describe('undo/redo', () => {
     useApp.getState().setParam('blur1', 'radius', 9);
     expect(useApp.getState().past).toHaveLength(2);
     useApp.getState().undo();
-    expect(useApp.getState().graph.nodes.blur1.params.radius).toBe(3);
+    expect(activeGraph().nodes.blur1.params.radius).toBe(3);
     useApp.getState().undo();
-    expect(useApp.getState().graph.nodes.blur1.params.radius).toBeUndefined();
+    expect(activeGraph().nodes.blur1.params.radius).toBeUndefined();
   });
 
   it('endGesture splits two drags of the same node into two undo steps', () => {
@@ -146,9 +156,9 @@ describe('undo/redo', () => {
   });
 
   it('undo with an empty stack is a no-op', () => {
-    const before = useApp.getState().graph;
+    const before = useApp.getState().doc;
     useApp.getState().undo();
-    expect(useApp.getState().graph).toBe(before);
+    expect(useApp.getState().doc).toBe(before);
   });
 
   it('the selection is dropped when the selected node vanishes on undo', () => {
@@ -156,5 +166,98 @@ describe('undo/redo', () => {
     expect(useApp.getState().selectedNodeId).not.toBeNull();
     useApp.getState().undo();
     expect(useApp.getState().selectedNodeId).toBeNull();
+  });
+});
+
+describe('layers', () => {
+  beforeEach(() => {
+    useApp.setState({ doc: docWith(chain()), activeLayerId: 'layer_1', selectedNodeId: null, past: [], future: [] });
+    endGesture();
+  });
+
+  it('addLayer inserts above the active layer, transparent by default, and activates it', () => {
+    useApp.getState().addLayer();
+    const { doc, activeLayerId } = useApp.getState();
+    expect(doc.layers).toHaveLength(2);
+    expect(doc.layers[1].id).toBe(activeLayerId); // above layer_1
+    expect(doc.layers[1].opacity).toBe(1);
+    expect(doc.layers[1].blendMode).toBe('normal');
+    const out = Object.values(doc.layers[1].graph.nodes).find((n) => n.type === 'Output')!;
+    expect(out.params.transparent).toBe(true);
+  });
+
+  it('graph edits land on the active layer only', () => {
+    useApp.getState().addLayer();
+    useApp.getState().addNode('Shape', { x: 0, y: 0 });
+    const { doc } = useApp.getState();
+    expect(Object.values(doc.layers[1].graph.nodes).some((n) => n.type === 'Shape')).toBe(true);
+    expect(Object.values(doc.layers[0].graph.nodes).some((n) => n.type === 'Shape')).toBe(false);
+  });
+
+  it('moveLayer reorders the stack and clamps at the ends', () => {
+    useApp.getState().addLayer();
+    const top = useApp.getState().activeLayerId;
+    useApp.getState().moveLayer(top, 1); // already topmost — no-op, no history
+    expect(useApp.getState().doc.layers[1].id).toBe(top);
+    const before = useApp.getState().past.length;
+    useApp.getState().moveLayer(top, -1);
+    expect(useApp.getState().doc.layers[0].id).toBe(top);
+    expect(useApp.getState().past.length).toBe(before + 1);
+  });
+
+  it('moveLayerTo places a layer at an absolute index, clamped, no-op in place', () => {
+    useApp.getState().addLayer();
+    useApp.getState().addLayer();
+    const [a, b, c] = useApp.getState().doc.layers.map((l) => l.id);
+    useApp.getState().moveLayerTo(c, 0);
+    expect(useApp.getState().doc.layers.map((l) => l.id)).toEqual([c, a, b]);
+    const before = useApp.getState().past.length;
+    useApp.getState().moveLayerTo(c, 0); // already there — no-op, no history
+    expect(useApp.getState().past.length).toBe(before);
+    useApp.getState().moveLayerTo(c, 99); // clamps to the top
+    expect(useApp.getState().doc.layers.map((l) => l.id)).toEqual([a, b, c]);
+  });
+
+  it('removeLayer refuses to drop the last layer and re-targets the active one', () => {
+    useApp.getState().removeLayer('layer_1');
+    expect(useApp.getState().doc.layers).toHaveLength(1); // refused
+    useApp.getState().addLayer();
+    const added = useApp.getState().activeLayerId;
+    useApp.getState().removeLayer(added);
+    expect(useApp.getState().doc.layers).toHaveLength(1);
+    expect(useApp.getState().activeLayerId).toBe('layer_1');
+  });
+
+  it('updateLayer sets blend mode and visibility discretely, coalesces opacity scrubs', () => {
+    useApp.getState().updateLayer('layer_1', { blendMode: 'multiply' });
+    useApp.getState().updateLayer('layer_1', { visible: false });
+    useApp.getState().updateLayer('layer_1', { opacity: 0.5 });
+    useApp.getState().updateLayer('layer_1', { opacity: 0.3 }); // same scrub — coalesces
+    const layer = useApp.getState().doc.layers[0];
+    expect(layer.blendMode).toBe('multiply');
+    expect(layer.visible).toBe(false);
+    expect(layer.opacity).toBe(0.3);
+    expect(useApp.getState().past).toHaveLength(3);
+  });
+
+  it('undoing a layer delete restores it; the active id survives revalidation', () => {
+    useApp.getState().addLayer();
+    const added = useApp.getState().activeLayerId;
+    useApp.getState().removeLayer(added);
+    useApp.getState().undo();
+    expect(useApp.getState().doc.layers).toHaveLength(2);
+    // the active layer had vanished from the restored doc's perspective — it
+    // must land on a layer that exists
+    const { doc, activeLayerId } = useApp.getState();
+    expect(doc.layers.some((l) => l.id === activeLayerId)).toBe(true);
+  });
+
+  it('selectLayer switches the editing target without touching history', () => {
+    useApp.getState().addLayer();
+    const before = useApp.getState().past.length;
+    useApp.getState().selectLayer('layer_1');
+    expect(useApp.getState().activeLayerId).toBe('layer_1');
+    expect(useApp.getState().past.length).toBe(before);
+    expect(activeGraph().nodes.text1).toBeDefined();
   });
 });

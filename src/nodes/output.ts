@@ -11,18 +11,25 @@ import { asElements } from './elements';
 
 export const OutputNode: NodeDef = {
   type: 'Output',
-  inputs: [{ name: 'in', type: ['raster', 'elements'] }],
+  // optional input: an unwired Output is an empty artboard (bare paper, or
+  // nothing at all when transparent) — a fresh layer cooks clean before it's wired
+  inputs: [{ name: 'in', type: ['raster', 'elements'], optional: true }],
   outputs: [{ name: 'out', type: 'raster' }],
-  params: [{ name: 'background', kind: 'color', default: '#ffffff' }],
+  params: [
+    // a transparent layer leaves the paper to the layers below it
+    { name: 'transparent', kind: 'toggle', default: false },
+    { name: 'background', kind: 'color', default: '#ffffff', showIf: { param: 'transparent', in: ['false'] } },
+  ],
   usesFrame: true,
   cook(inputs, params, ctx) {
-    const input = inputs.in as RasterValue | ElementsValue;
+    const input = inputs.in as RasterValue | ElementsValue | undefined;
     const gpu = ctx.gpu;
     if (!gpu) throw new Error('Output needs a GPU context to composite');
     const { width, height } = ctx.frame;
     const [r, g, b] = hexToRgb(String(params.background));
+    const background = params.transparent === true ? { r: 0, g: 0, b: 0, a: 0 } : { r, g, b, a: 1 };
     // a raster lifts to a single centered element — same compositing path
-    const texture = renderElements(gpu, ctx.fonts, asElements(input), width, height, { r, g, b, a: 1 });
+    const texture = renderElements(gpu, ctx.fonts, input ? asElements(input) : [], width, height, background);
     return { out: { kind: 'raster', texture, width, height } satisfies RasterValue };
   },
 };

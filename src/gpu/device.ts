@@ -12,6 +12,7 @@ import {
   COMPOSITE_FS,
   DITHER_FS,
   FULLSCREEN_VS,
+  LAYER_BLEND_FS,
   QUAD_SHADER,
   RECOLOR_FS,
   TO_ALPHA_FS,
@@ -27,6 +28,7 @@ const FRAGMENTS: Record<string, string> = {
   ascii: ASCII_FS,
   toalpha: TO_ALPHA_FS,
   composite: COMPOSITE_FS,
+  layerblend: LAYER_BLEND_FS,
 };
 
 /** Pass sources are pooled render targets or persistent textures (atlas, white). */

@@ -1,16 +1,20 @@
-// App state: the document graph is the single source of truth. The xyflow
-// editor renders it and writes edits back through these actions; the
-// evaluator only ever reads it.
+// App state: the document — an ordered stack of layers, each one a full node
+// graph — is the single source of truth. The xyflow editor renders the active
+// layer's graph and writes edits back through these actions; the evaluator
+// only ever reads it.
 
 import { create } from 'zustand';
 import * as opentype from 'opentype.js';
 import type { Font } from 'opentype.js';
 import {
+  BLEND_MODES,
   DEFAULT_FRAME,
   edgeKey,
   hasPath,
+  type Doc,
   type Frame,
   type Graph,
+  type Layer,
   type NodeId,
   type ParamValue,
 } from './engine/graph';
@@ -56,6 +60,10 @@ export async function loadLocalFontsIfGranted(): Promise<void> {
     // permission not queryable or access revoked mid-flight — the font
     // picker's ⤓ button still prompts on demand
   }
+}
+
+function makeLayer(id: string, name: string, graph: Graph): Layer {
+  return { id, name, visible: true, opacity: 1, blendMode: 'normal', graph };
 }
 
 const factoryGraph: Graph = {
@@ -112,28 +120,58 @@ const factoryGraph: Graph = {
   ],
 };
 
-// The working document persists to localStorage on every graph edit, so the
-// current set-up IS the default on next load. The factory graph is only the
-// first-run (or unreadable-save) fallback.
-const STORAGE_KEY = 'gfx.document.v1';
+// The working document persists to localStorage on every edit, so the current
+// set-up IS the default on next load. The factory graph is only the first-run
+// (or unreadable-save) fallback. v1 saves held a single graph — they load as
+// a one-layer document; v1 is left in place so older builds can still read it.
+const STORAGE_KEY = 'gfx.document.v2';
+const LEGACY_STORAGE_KEY = 'gfx.document.v1';
 const canPersist = typeof localStorage !== 'undefined';
 
-function loadSavedGraph(): Graph | null {
+function validGraph(g: Graph | null | undefined): g is Graph {
+  if (!g || typeof g !== 'object' || !g.nodes || !Array.isArray(g.edges)) return false;
+  // a save referencing node types this build no longer ships can't cook
+  for (const n of Object.values(g.nodes)) if (!registry.get(n.type)) return false;
+  return true;
+}
+
+function loadSavedDoc(): Doc | null {
   if (!canPersist) return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const g = JSON.parse(raw) as Graph;
-    if (!g || typeof g !== 'object' || !g.nodes || !Array.isArray(g.edges)) return null;
-    // a save referencing node types this build no longer ships can't cook
-    for (const n of Object.values(g.nodes)) if (!registry.get(n.type)) return null;
-    return g;
+    if (raw) {
+      const d = JSON.parse(raw) as Doc;
+      if (!d || typeof d !== 'object' || !Array.isArray(d.layers) || d.layers.length === 0) return null;
+      const layers: Layer[] = [];
+      for (const l of d.layers) {
+        if (!l || typeof l.id !== 'string' || !validGraph(l.graph)) return null;
+        layers.push({
+          id: l.id,
+          name: typeof l.name === 'string' ? l.name : `Layer ${layers.length + 1}`,
+          visible: l.visible !== false,
+          opacity: Math.max(0, Math.min(1, Number(l.opacity ?? 1))),
+          blendMode: BLEND_MODES.includes(l.blendMode) ? l.blendMode : 'normal',
+          graph: l.graph,
+        });
+      }
+      return { frame: d.frame ?? DEFAULT_FRAME, layers };
+    }
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const g = JSON.parse(legacy) as Graph;
+      if (!validGraph(g)) return null;
+      return { frame: g.frame ?? DEFAULT_FRAME, layers: [makeLayer('layer_1', 'Layer 1', { nodes: g.nodes, edges: g.edges })] };
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-const initialGraph: Graph = loadSavedGraph() ?? factoryGraph;
+const initialDoc: Doc = loadSavedDoc() ?? {
+  frame: factoryGraph.frame ?? DEFAULT_FRAME,
+  layers: [makeLayer('layer_1', 'Layer 1', factoryGraph)],
+};
 
 export interface WireSpec {
   source: NodeId;
@@ -170,11 +208,13 @@ export function endGesture(): void {
 }
 
 interface AppStore {
-  graph: Graph;
+  doc: Doc;
+  /** the layer whose graph the node editor shows and edits — always a live id */
+  activeLayerId: string;
   selectedNodeId: NodeId | null;
-  /** undo/redo stacks of graph snapshots — selection and fonts stay out of history */
-  past: Graph[];
-  future: Graph[];
+  /** undo/redo stacks of document snapshots — selection and fonts stay out of history */
+  past: Doc[];
+  future: Doc[];
   undo: () => void;
   redo: () => void;
   /** parsed fonts ready to cook, keyed by font key ('default' + local families) */
@@ -189,6 +229,16 @@ interface AppStore {
   removeNodes: (ids: NodeId[]) => void;
   connect: (w: WireSpec) => void;
   removeEdges: (edgeKeys: string[]) => void;
+  selectLayer: (id: string) => void;
+  /** insert a fresh layer (transparent Output, empty otherwise) above the active one */
+  addLayer: () => void;
+  /** refuses to remove the last layer — the document always has one */
+  removeLayer: (id: string) => void;
+  /** +1 raises the layer in the stack, -1 lowers it; no-op at the ends */
+  moveLayer: (id: string, dir: 1 | -1) => void;
+  /** drag-and-drop reorder: place a layer at an absolute stack index (0 = bottom) */
+  moveLayerTo: (id: string, to: number) => void;
+  updateLayer: (id: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity' | 'blendMode'>>) => void;
   addFont: (key: string, font: Font) => void;
   /** parse a queryable local font (by family) into the cookable fonts map */
   loadLocalFont: (family: string) => Promise<void>;
@@ -196,9 +246,32 @@ interface AppStore {
   loadLocalFonts: () => Promise<void>;
 }
 
-let nextId = 1;
+/** The graph the node editor is looking at — the active layer's. */
+export function selectActiveGraph(s: Pick<AppStore, 'doc' | 'activeLayerId'>): Graph {
+  return (s.doc.layers.find((l) => l.id === s.activeLayerId) ?? s.doc.layers[s.doc.layers.length - 1]).graph;
+}
 
-/** The history push that precedes a graph edit. A `key` marks the edit as
+/** An immutable update of the active layer's graph, leaving the other layers shared. */
+function editActiveGraph(s: AppStore, fn: (g: Graph) => Graph): Doc {
+  return {
+    ...s.doc,
+    layers: s.doc.layers.map((l) => (l.id === s.activeLayerId ? { ...l, graph: fn(l.graph) } : l)),
+  };
+}
+
+/** After swapping in a document (undo/redo), keep active layer + selection pointing at things that exist. */
+function revalidate(s: AppStore, doc: Doc): Pick<AppStore, 'activeLayerId' | 'selectedNodeId'> {
+  const layer = doc.layers.find((l) => l.id === s.activeLayerId) ?? doc.layers[doc.layers.length - 1];
+  return {
+    activeLayerId: layer.id,
+    selectedNodeId: s.selectedNodeId && layer.graph.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+  };
+}
+
+let nextId = 1;
+let nextLayerId = 2;
+
+/** The history push that precedes a document edit. A `key` marks the edit as
  * continuous: repeats inside the coalescing window reuse the snapshot already
  * pushed. Discrete edits pass null and always snapshot. */
 function pushHistory(s: AppStore, key: string | null): Pick<AppStore, 'past' | 'future'> | undefined {
@@ -208,11 +281,12 @@ function pushHistory(s: AppStore, key: string | null): Pick<AppStore, 'past' | '
     return undefined;
   }
   lastEdit = key ? { key, time: now } : null;
-  return { past: [...s.past.slice(1 - HISTORY_LIMIT), s.graph], future: [] };
+  return { past: [...s.past.slice(1 - HISTORY_LIMIT), s.doc], future: [] };
 }
 
 export const useApp = create<AppStore>((set, get) => ({
-  graph: initialGraph,
+  doc: initialDoc,
+  activeLayerId: initialDoc.layers[initialDoc.layers.length - 1].id,
   selectedNodeId: null,
   past: [],
   future: [],
@@ -228,9 +302,9 @@ export const useApp = create<AppStore>((set, get) => ({
       endGesture();
       return {
         past: s.past.slice(0, -1),
-        future: [...s.future, s.graph],
-        graph: prev,
-        selectedNodeId: s.selectedNodeId && prev.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+        future: [...s.future, s.doc],
+        doc: prev,
+        ...revalidate(s, prev),
       };
     }),
 
@@ -241,17 +315,17 @@ export const useApp = create<AppStore>((set, get) => ({
       endGesture();
       return {
         future: s.future.slice(0, -1),
-        past: [...s.past, s.graph],
-        graph: next,
-        selectedNodeId: s.selectedNodeId && next.nodes[s.selectedNodeId] ? s.selectedNodeId : null,
+        past: [...s.past, s.doc],
+        doc: next,
+        ...revalidate(s, next),
       };
     }),
 
   setFrame: (frame) =>
     set((s) => ({
       ...pushHistory(s, 'frame'),
-      graph: {
-        ...s.graph,
+      doc: {
+        ...s.doc,
         frame: {
           width: Math.max(16, Math.min(4096, Math.round(frame.width) || DEFAULT_FRAME.width)),
           height: Math.max(16, Math.min(4096, Math.round(frame.height) || DEFAULT_FRAME.height)),
@@ -261,32 +335,30 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setParam: (nodeId, name, value) =>
     set((s) => ({
-      ...pushHistory(s, `param:${nodeId}:${name}`),
-      graph: {
-        ...s.graph,
-        nodes: {
-          ...s.graph.nodes,
-          [nodeId]: { ...s.graph.nodes[nodeId], params: { ...s.graph.nodes[nodeId].params, [name]: value } },
-        },
-      },
+      ...pushHistory(s, `param:${s.activeLayerId}:${nodeId}:${name}`),
+      doc: editActiveGraph(s, (g) => ({
+        ...g,
+        nodes: { ...g.nodes, [nodeId]: { ...g.nodes[nodeId], params: { ...g.nodes[nodeId].params, [name]: value } } },
+      })),
     })),
 
   moveNode: (nodeId, position) =>
     set((s) => ({
-      ...pushHistory(s, `move:${nodeId}`),
-      graph: { ...s.graph, nodes: { ...s.graph.nodes, [nodeId]: { ...s.graph.nodes[nodeId], position } } },
+      ...pushHistory(s, `move:${s.activeLayerId}:${nodeId}`),
+      doc: editActiveGraph(s, (g) => ({ ...g, nodes: { ...g.nodes, [nodeId]: { ...g.nodes[nodeId], position } } })),
     })),
 
   addNode: (type, position) =>
     set((s) => {
       const def = registry.get(type);
       if (!def) return s;
+      const graph = selectActiveGraph(s);
       let id = `${type.toLowerCase()}_${nextId++}`;
-      while (s.graph.nodes[id]) id = `${type.toLowerCase()}_${nextId++}`;
+      while (graph.nodes[id]) id = `${type.toLowerCase()}_${nextId++}`;
       const params = Object.fromEntries(def.params.map((p) => [p.name, p.default]));
       return {
         ...pushHistory(s, null),
-        graph: { ...s.graph, nodes: { ...s.graph.nodes, [id]: { id, type, params, position } } },
+        doc: editActiveGraph(s, (g) => ({ ...g, nodes: { ...g.nodes, [id]: { id, type, params, position } } })),
         selectedNodeId: id,
       };
     }),
@@ -294,33 +366,115 @@ export const useApp = create<AppStore>((set, get) => ({
   removeNodes: (ids) =>
     set((s) => {
       const drop = new Set(ids);
-      const nodes = Object.fromEntries(Object.entries(s.graph.nodes).filter(([id]) => !drop.has(id)));
-      const edges = s.graph.edges.filter((e) => !drop.has(e.from.node) && !drop.has(e.to.node));
       return {
         ...pushHistory(s, null),
-        graph: { ...s.graph, nodes, edges },
+        doc: editActiveGraph(s, (g) => ({
+          ...g,
+          nodes: Object.fromEntries(Object.entries(g.nodes).filter(([id]) => !drop.has(id))),
+          edges: g.edges.filter((e) => !drop.has(e.from.node) && !drop.has(e.to.node)),
+        })),
         selectedNodeId: s.selectedNodeId && drop.has(s.selectedNodeId) ? null : s.selectedNodeId,
       };
     }),
 
   connect: (w) =>
     set((s) => {
-      if (!wireIsValid(s.graph, w)) return s;
-      // an input socket holds one wire — a new connection replaces the old one
-      const edges = s.graph.edges.filter(
-        (e) => !(e.to.node === w.target && e.to.socket === w.targetHandle),
-      );
-      edges.push({
-        from: { node: w.source, socket: w.sourceHandle },
-        to: { node: w.target, socket: w.targetHandle },
-      });
-      return { ...pushHistory(s, null), graph: { ...s.graph, edges } };
+      if (!wireIsValid(selectActiveGraph(s), w)) return s;
+      return {
+        ...pushHistory(s, null),
+        doc: editActiveGraph(s, (g) => ({
+          ...g,
+          // an input socket holds one wire — a new connection replaces the old one
+          edges: [
+            ...g.edges.filter((e) => !(e.to.node === w.target && e.to.socket === w.targetHandle)),
+            { from: { node: w.source, socket: w.sourceHandle }, to: { node: w.target, socket: w.targetHandle } },
+          ],
+        })),
+      };
     }),
 
   removeEdges: (keys) =>
     set((s) => {
       const drop = new Set(keys);
-      return { ...pushHistory(s, null), graph: { ...s.graph, edges: s.graph.edges.filter((e) => !drop.has(edgeKey(e))) } };
+      return {
+        ...pushHistory(s, null),
+        doc: editActiveGraph(s, (g) => ({ ...g, edges: g.edges.filter((e) => !drop.has(edgeKey(e))) })),
+      };
+    }),
+
+  selectLayer: (id) =>
+    set((s) => {
+      if (s.activeLayerId === id || !s.doc.layers.some((l) => l.id === id)) return s;
+      // switching layers is a view change, not a document edit — no history
+      return { activeLayerId: id, selectedNodeId: null };
+    }),
+
+  addLayer: () =>
+    set((s) => {
+      let id = `layer_${nextLayerId++}`;
+      while (s.doc.layers.some((l) => l.id === id)) id = `layer_${nextLayerId++}`;
+      // a fresh layer starts as a transparent Output so the stack shows through
+      const graph: Graph = {
+        nodes: { out: { id: 'out', type: 'Output', params: { transparent: true }, position: { x: 480, y: 120 } } },
+        edges: [],
+      };
+      const layer = makeLayer(id, `Layer ${s.doc.layers.length + 1}`, graph);
+      const at = s.doc.layers.findIndex((l) => l.id === s.activeLayerId) + 1;
+      const layers = [...s.doc.layers.slice(0, at), layer, ...s.doc.layers.slice(at)];
+      return {
+        ...pushHistory(s, null),
+        doc: { ...s.doc, layers },
+        activeLayerId: id,
+        selectedNodeId: null,
+      };
+    }),
+
+  removeLayer: (id) =>
+    set((s) => {
+      if (s.doc.layers.length <= 1) return s;
+      const at = s.doc.layers.findIndex((l) => l.id === id);
+      if (at === -1) return s;
+      const layers = s.doc.layers.filter((l) => l.id !== id);
+      const active = s.activeLayerId === id ? layers[Math.min(at, layers.length - 1)].id : s.activeLayerId;
+      return {
+        ...pushHistory(s, null),
+        doc: { ...s.doc, layers },
+        activeLayerId: active,
+        selectedNodeId: s.activeLayerId === id ? null : s.selectedNodeId,
+      };
+    }),
+
+  moveLayer: (id, dir) =>
+    set((s) => {
+      const at = s.doc.layers.findIndex((l) => l.id === id);
+      const to = at + dir;
+      if (at === -1 || to < 0 || to >= s.doc.layers.length) return s;
+      const layers = [...s.doc.layers];
+      [layers[at], layers[to]] = [layers[to], layers[at]];
+      return { ...pushHistory(s, null), doc: { ...s.doc, layers } };
+    }),
+
+  moveLayerTo: (id, to) =>
+    set((s) => {
+      const at = s.doc.layers.findIndex((l) => l.id === id);
+      if (at === -1) return s;
+      const clamped = Math.max(0, Math.min(s.doc.layers.length - 1, to));
+      if (clamped === at) return s;
+      const layers = [...s.doc.layers];
+      const [layer] = layers.splice(at, 1);
+      layers.splice(clamped, 0, layer);
+      return { ...pushHistory(s, null), doc: { ...s.doc, layers } };
+    }),
+
+  updateLayer: (id, patch) =>
+    set((s) => {
+      if (!s.doc.layers.some((l) => l.id === id)) return s;
+      // opacity scrubs and name typing coalesce into one undo step each
+      const key = 'opacity' in patch ? `layer:${id}:opacity` : 'name' in patch ? `layer:${id}:name` : null;
+      return {
+        ...pushHistory(s, key),
+        doc: { ...s.doc, layers: s.doc.layers.map((l) => (l.id === id ? { ...l, ...patch } : l)) },
+      };
     }),
 
   addFont: (key, font) => set((s) => ({ fonts: { ...s.fonts, [key]: font } })),
@@ -371,9 +525,9 @@ export const useApp = create<AppStore>((set, get) => ({
 
 if (canPersist) {
   useApp.subscribe((s, prev) => {
-    if (s.graph === prev.graph) return;
+    if (s.doc === prev.doc) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(s.graph));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(s.doc));
     } catch {
       // quota/private-mode failures shouldn't break editing
     }

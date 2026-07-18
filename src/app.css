@@ -334,3 +334,65 @@ input.num-field:focus { outline: none; }
   color: var(--text); cursor: pointer; padding: 2px 6px; font: inherit; font-size: 9px;
 }
 .bind-add:hover { background: var(--panel-3); }
+
+/* Layer stack — floats over the stage, top layer first. The header edits the
+   active layer's blend mode + opacity; rows switch which graph the editor shows. */
+.layers-panel {
+  position: absolute; top: 12px; right: 12px; z-index: 20;
+  width: 208px; max-height: 60%; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  font-size: 11px;
+}
+.layers-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 8px; border-bottom: 1px solid var(--rule);
+}
+.layers-panel.collapsed .layers-head { border-bottom: none; }
+.layers-toggle {
+  display: flex; align-items: center; gap: 5px;
+  background: transparent; border: none; padding: 0; cursor: pointer; font: inherit;
+}
+.layers-toggle:hover .layers-title, .layers-toggle:hover .layers-chevron { color: var(--text); }
+.layers-chevron { color: var(--muted-2); font-size: 9px; line-height: 1; }
+.layers-title { text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-size: 10px; }
+.layers-blend {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-bottom: 1px solid var(--rule);
+}
+.layers-blend select {
+  flex: 1; min-width: 0;
+  background: var(--panel-solid); border: 1px solid var(--border); color: var(--text);
+  padding: 2px 4px; border-radius: 0; font: inherit; font-size: 10px;
+}
+.layers-opacity { flex: none; width: 68px; display: flex; }
+.layers-list { overflow-y: auto; }
+.layer-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; cursor: pointer; border-bottom: 1px solid var(--rule);
+}
+.layer-row:last-child { border-bottom: none; }
+.layer-row:hover { background: var(--panel-2); }
+.layer-row.active { background: var(--panel-active); }
+.layer-row.dragging { opacity: 0.4; }
+/* drop position while dragging a row — an accent line on the receiving edge */
+.layer-row.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
+.layer-row.drop-below { box-shadow: inset 0 -2px 0 var(--accent); }
+.layer-row.hidden-layer .layer-name { color: var(--muted-2); }
+.layer-eye {
+  background: transparent; border: none; cursor: pointer; color: var(--muted);
+  padding: 0 2px; font: inherit; line-height: 1;
+}
+.layer-eye:hover { color: var(--text); }
+.layer-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  user-select: none;
+}
+.layer-name-input {
+  flex: 1; min-width: 0;
+  background: var(--panel-solid); border: 1px solid var(--border); color: var(--text);
+  padding: 1px 4px; border-radius: 0; font: inherit;
+}
+.layer-tools { display: none; gap: 2px; }
+.layer-row:hover .layer-tools, .layer-row.active .layer-tools { display: flex; }
+.layer-tools .num-arrow:disabled { opacity: 0.3; cursor: default; }

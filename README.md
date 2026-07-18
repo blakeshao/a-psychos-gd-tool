@@ -42,7 +42,11 @@ Values on wires are typed: `text`, `vector`, `raster`, `alpha`, `layout`, `eleme
 
 ### The frame
 
-The document has one **frame** (artboard size), edited in the sidebar and stored in the graph. Frame-aware nodes — Rasterize, Noise, Output — cook at frame resolution via `ctx.frame` and declare `usesFrame`, so the evaluator folds the frame into their content hash. Changing the frame re-cooks exactly those nodes and their descendants; text shaping and vector geometry stay cached. There are no per-node resolution params.
+The document has one **frame** (artboard size), edited in the sidebar and stored in the document. Frame-aware nodes — Rasterize, Noise, Output — cook at frame resolution via `ctx.frame` and declare `usesFrame`, so the evaluator folds the frame into their content hash. Changing the frame re-cooks exactly those nodes and their descendants; text shaping and vector geometry stay cached. There are no per-node resolution params.
+
+### Layers
+
+The document is an ordered stack of **layers**, and each layer is its own complete node graph with its own Output. The layers panel (over the viewport) reorders the stack, toggles visibility, and switches which graph the node editor shows; the stack composites bottom-to-top on the GPU with a per-layer **opacity** and **blend mode** — the full Photoshop set (multiply, screen, overlay, color dodge/burn, vivid/linear/pin light, hard mix, difference, divide, hue, saturation, color, luminosity, …). A new layer's Output starts transparent so the layers below show through; layers keep independent cook caches, so editing one never re-cooks the others.
 
 ### Caching
 
@@ -91,7 +95,7 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 | **Composition** | | Merge separate lanes into one image before (or instead of) the artboard. |
 | Composite | `raster/elements ×2 (+ alpha?) → raster` | Blends overlay onto base (normal / multiply / screen / overlay) with opacity and an optional mask. |
 | **Output** | | The cook root — requesting it is what makes the graph compute. |
-| Output | `raster/elements → raster` | The artboard: composites its input over the background paper at frame resolution, in z-order. |
+| Output | `raster/elements → raster` | The layer's artboard: composites its input over the background paper (or a transparent ground) at frame resolution, in z-order. |
 
 `?` marks an optional input; `any` on Duplicator is `vector | raster | text | elements`. `src/nodes/index.ts` is the single source of truth for the palette.
 
@@ -100,7 +104,7 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 - `src/engine/` — the core: document graph (pure JSON), node registry (typed sockets + `cook()`), pull-based evaluator with hash-keyed memoization.
 - `src/gpu/` — WebGPU wrapper: ref-counted texture pool, fullscreen-pass runner, WGSL shaders. Every raster op is one pass: sample previous target, write next.
 - `src/nodes/` — node definitions. `Rasterize` is the CPU→GPU boundary; resolution is introduced there and inherited downstream.
-- `src/store.ts` — zustand store; the document graph is the single source of truth, the editor and evaluator both read it. `wireIsValid` = socket-type equality + acyclicity.
+- `src/store.ts` — zustand store; the document — an ordered stack of layers, each one a full node graph — is the single source of truth, the editor and evaluator both read it. `wireIsValid` = socket-type equality + acyclicity.
 - `src/editor/` — xyflow canvas + custom node component; handles and wires colored by socket type.
 - `src/util/` — font parsing (sfnt), expression evaluation, color, noise.
 

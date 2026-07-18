@@ -1,19 +1,22 @@
-// Shell: node editor (left) and the poster viewport presenting the Output
-// node's raster (right). A top bar holds the frame config and a collapsible
-// cook log. Node parameters are edited inline on each node. Any document edit
-// schedules a cook on the next animation frame.
+// Shell: node editor (left, showing the active layer's graph) and the poster
+// viewport presenting the composited layer stack (right). A top bar holds the
+// frame config, a floating panel the layer stack, and a collapsible cook log.
+// Node parameters are edited inline on each node. Any document edit schedules
+// a cook on the next animation frame.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as opentype from 'opentype.js';
 import type { Font } from 'opentype.js';
-import { DEFAULT_FRAME, type Graph, type NodeId } from './engine/graph';
+import { BLEND_MODES, type Doc, type Graph, type NodeId } from './engine/graph';
 import { Evaluator, type CookEvent } from './engine/evaluator';
 import { socketTypes, type CookContext } from './engine/registry';
 import type { Placement, RasterValue } from './engine/values';
 import { GpuContext } from './gpu/device';
+import type { PooledTexture } from './gpu/pool';
 import { registry } from './nodes';
 import { NodeEditor } from './editor/NodeEditor';
-import { loadLocalFontsIfGranted, useApp } from './store';
+import { LayersPanel } from './editor/LayersPanel';
+import { loadLocalFontsIfGranted, selectActiveGraph, useApp } from './store';
 
 const FONT_URLS = ['/fonts/Inter-Regular.otf', '/fonts/JetBrainsMono-Regular.ttf', '/fonts/local-fallback.ttf'];
 
@@ -47,10 +50,63 @@ function findOutputNode(graph: Graph): NodeId | null {
   return Object.values(graph.nodes).find((n) => n.type === 'Output')?.id ?? null;
 }
 
+/**
+ * Cook every visible layer (each through its own evaluator, so per-layer
+ * caches never collide) and blend the stack bottom-to-top on the GPU. The
+ * caller owns the returned texture and releases it after present/readback.
+ */
+async function renderDoc(
+  doc: Doc,
+  ctx: CookContext,
+  evaluators: Map<string, Evaluator>,
+): Promise<{ texture: PooledTexture; events: CookEvent[] }> {
+  const gpu = ctx.gpu!;
+  const { width, height } = ctx.frame;
+  // a deleted layer takes its evaluator — and its cached textures — with it
+  for (const [id, evaluator] of evaluators) {
+    if (!doc.layers.some((l) => l.id === id)) {
+      evaluator.dispose(ctx);
+      evaluators.delete(id);
+    }
+  }
+  const events: CookEvent[] = [];
+  let acc = gpu.pool.acquire(width, height);
+  gpu.clear(acc, { r: 0, g: 0, b: 0, a: 0 });
+  try {
+    for (const layer of doc.layers) {
+      if (!layer.visible) continue;
+      const outputId = findOutputNode(layer.graph);
+      if (!outputId) throw new Error(`layer "${layer.name}" has no Output node`);
+      let evaluator = evaluators.get(layer.id);
+      if (!evaluator) {
+        evaluator = new Evaluator(registry);
+        evaluators.set(layer.id, evaluator);
+      }
+      const result = await evaluator.evaluate(layer.graph, outputId, ctx);
+      events.push(...evaluator.events);
+      const raster = result.outputs.out as RasterValue;
+      const next = gpu.pool.acquire(width, height);
+      gpu.runPass('layerblend', [acc, raster.texture], next, new Float32Array([
+        Math.max(0, BLEND_MODES.indexOf(layer.blendMode)),
+        layer.opacity,
+        0,
+        0,
+      ]));
+      gpu.pool.release(acc);
+      acc = next;
+    }
+  } catch (err) {
+    gpu.pool.release(acc);
+    throw err;
+  }
+  return { texture: acc, events };
+}
+
 type Status = 'booting' | 'ready' | 'no-webgpu' | 'no-font';
 
 export default function App() {
-  const graph = useApp((s) => s.graph);
+  const doc = useApp((s) => s.doc);
+  const activeGraph = useApp(selectActiveGraph);
   const selectedNodeId = useApp((s) => s.selectedNodeId);
   const fonts = useApp((s) => s.fonts);
   const localFonts = useApp((s) => s.localFonts);
@@ -67,9 +123,9 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const guideRef = useRef<HTMLCanvasElement>(null);
   const gpuRef = useRef<GpuContext | null>(null);
-  const evaluatorRef = useRef(new Evaluator(registry));
+  const evaluatorsRef = useRef(new Map<string, Evaluator>()); // one cache per layer
   const busyRef = useRef(false);
-  const queuedRef = useRef<Graph | null>(null);
+  const queuedRef = useRef<Doc | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,11 +144,11 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const runCook = useCallback(async (g: Graph) => {
+  const runCook = useCallback(async (d: Doc) => {
     const gpu = gpuRef.current;
     const canvas = canvasRef.current;
     if (!gpu || !canvas) return;
-    if (busyRef.current) { queuedRef.current = g; return; }
+    if (busyRef.current) { queuedRef.current = d; return; }
     busyRef.current = true;
     // lax loading: most cooks are instant, so only reveal the overlay once a cook
     // has been running long enough to actually feel like a wait. fast cooks clear
@@ -101,17 +157,15 @@ export default function App() {
     const ctx: CookContext = {
       gpu,
       fonts: new Map(Object.entries(useApp.getState().fonts)),
-      frame: g.frame ?? DEFAULT_FRAME,
+      frame: d.frame,
     };
     try {
-      const outputId = findOutputNode(g);
-      if (!outputId) { setCookError('add an Output node to cook the graph'); return; }
-      const result = await evaluatorRef.current.evaluate(g, outputId, ctx);
-      const raster = result.outputs.out as RasterValue;
-      canvas.width = raster.width;
-      canvas.height = raster.height;
-      gpu.present(raster.texture, canvas);
-      setEvents([...evaluatorRef.current.events]);
+      const { texture, events } = await renderDoc(d, ctx, evaluatorsRef.current);
+      canvas.width = texture.width;
+      canvas.height = texture.height;
+      gpu.present(texture, canvas);
+      gpu.pool.release(texture);
+      setEvents(events);
       setPoolStats(gpu.pool.stats());
       setCookError(null);
     } catch (err) {
@@ -127,27 +181,26 @@ export default function App() {
     }
   }, []);
 
-  // Export re-evaluates through the cache (all HITs unless the doc changed
-  // mid-click), reads the output texture back to the CPU, and downloads a PNG.
-  // Shares busyRef with runCook: cache eviction only happens inside evaluate(),
-  // so serializing against cooks keeps the texture alive through readback.
+  // Export re-evaluates through the caches (all HITs unless the doc changed
+  // mid-click), composites the stack, reads it back to the CPU, and downloads
+  // a PNG — transparency in the stack survives into the file. Shares busyRef
+  // with runCook: cache eviction only happens inside evaluate(), so serializing
+  // against cooks keeps the layer textures alive through the composite.
   const exportPng = useCallback(async () => {
     const gpu = gpuRef.current;
     if (!gpu || busyRef.current) return;
     busyRef.current = true;
     setExporting(true);
     try {
-      const g = useApp.getState().graph;
-      const outputId = findOutputNode(g);
-      if (!outputId) { setCookError('add an Output node to export'); return; }
+      const d = useApp.getState().doc;
       const ctx: CookContext = {
         gpu,
         fonts: new Map(Object.entries(useApp.getState().fonts)),
-        frame: g.frame ?? DEFAULT_FRAME,
+        frame: d.frame,
       };
-      const result = await evaluatorRef.current.evaluate(g, outputId, ctx);
-      const raster = result.outputs.out as RasterValue;
-      const image = await gpu.readback(raster.texture);
+      const { texture } = await renderDoc(d, ctx, evaluatorsRef.current);
+      const image = await gpu.readback(texture);
+      gpu.pool.release(texture);
       const off = document.createElement('canvas');
       off.width = image.width;
       off.height = image.height;
@@ -173,27 +226,30 @@ export default function App() {
 
   useEffect(() => {
     if (status !== 'ready') return;
-    const id = requestAnimationFrame(() => runCook(graph));
+    const id = requestAnimationFrame(() => runCook(doc));
     return () => cancelAnimationFrame(id);
-  }, [graph, status, runCook, fonts]);
+  }, [doc, status, runCook, fonts]);
 
-  // Parse any local font a Text node references but that isn't loaded yet;
-  // addFont then bumps `fonts`, which re-cooks via the effect above. Also runs
-  // when `localFonts` arrives so a saved document's fonts load right at startup.
+  // Parse any local font a Text node (on any layer) references but that isn't
+  // loaded yet; addFont then bumps `fonts`, which re-cooks via the effect
+  // above. Also runs when `localFonts` arrives so a saved document's fonts
+  // load right at startup.
   useEffect(() => {
     const { fonts: loaded, loadLocalFont } = useApp.getState();
-    for (const node of Object.values(graph.nodes)) {
-      if (node.type !== 'Text') continue;
-      const key = String(node.params.font ?? 'default');
-      if (key !== 'default' && !loaded[key]) loadLocalFont(key);
+    for (const layer of doc.layers) {
+      for (const node of Object.values(layer.graph.nodes)) {
+        if (node.type !== 'Text') continue;
+        const key = String(node.params.font ?? 'default');
+        if (key !== 'default' && !loaded[key]) loadLocalFont(key);
+      }
     }
-  }, [graph, fonts, localFonts]);
+  }, [doc, fonts, localFonts]);
 
   // Selecting a node that produces a layout shows its placements as a guide
   // over the artboard. Cooked with a throwaway CPU-only evaluator so the main
   // cook cache is untouched; chains that need the GPU just skip the guide.
   useEffect(() => {
-    const node = selectedNodeId ? graph.nodes[selectedNodeId] : null;
+    const node = selectedNodeId ? activeGraph.nodes[selectedNodeId] : null;
     const def = node ? registry.get(node.type) : null;
     const layoutSocket = def?.outputs.find((s) => socketTypes(s).includes('layout'));
     if (status !== 'ready' || !node || !layoutSocket) {
@@ -206,9 +262,9 @@ export default function App() {
         const ctx: CookContext = {
           gpu: null,
           fonts: new Map(Object.entries(useApp.getState().fonts)),
-          frame: graph.frame ?? DEFAULT_FRAME,
+          frame: doc.frame,
         };
-        const result = await new Evaluator(registry).evaluate(graph, node.id, ctx);
+        const result = await new Evaluator(registry).evaluate(activeGraph, node.id, ctx);
         const value = result.outputs[layoutSocket.name];
         if (!cancelled) setGuide(value?.kind === 'layout' ? value.placements : null);
       } catch {
@@ -216,14 +272,14 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [graph, selectedNodeId, status]);
+  }, [doc.frame, activeGraph, selectedNodeId, status]);
 
   // draw the guide, artboard-centered: placements with cell extents (Grid) draw
   // their actual rect; point placements keep the circle + rotation tick marker
   useEffect(() => {
     const canvas = guideRef.current;
     if (!canvas || !guide) return;
-    const { width, height } = graph.frame ?? DEFAULT_FRAME;
+    const { width, height } = doc.frame;
     canvas.width = width;
     canvas.height = height;
     const c = canvas.getContext('2d')!;
@@ -257,12 +313,12 @@ export default function App() {
       c.arc(x, y, c.lineWidth, 0, Math.PI * 2);
       c.fill();
     }
-  }, [guide, graph.frame]);
+  }, [guide, doc.frame]);
 
   if (status === 'no-webgpu') return <div className="boot-msg">WebGPU is not available in this browser. Try Chrome/Edge 113+, or Safari 18+.</div>;
   if (status === 'no-font') return <div className="boot-msg">No font found — run <code>scripts/get-font.sh</code> to fetch one into <code>public/fonts/</code>.</div>;
 
-  const frame = graph.frame ?? DEFAULT_FRAME;
+  const frame = doc.frame;
 
   return (
     <div className="app">
@@ -340,6 +396,7 @@ export default function App() {
               <canvas ref={canvasRef} />
               {guide && <canvas ref={guideRef} className="guide-overlay" />}
               {pending && <div className="cook-pending" role="status" aria-label="rendering" />}
+              <LayersPanel />
             </>
           )}
         </div>
