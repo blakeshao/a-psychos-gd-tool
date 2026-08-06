@@ -9,6 +9,7 @@ import * as opentype from 'opentype.js';
 import type { Font } from 'opentype.js';
 import { BLEND_MODES, type Doc, type Graph, type NodeId } from './engine/graph';
 import { Evaluator, type CookEvent } from './engine/evaluator';
+import { arcCellOutline } from './engine/path';
 import { socketTypes, type CookContext } from './engine/registry';
 import type { Placement, RasterValue } from './engine/values';
 import { GpuContext } from './gpu/device';
@@ -318,6 +319,22 @@ export default function App() {
     for (const p of guide.placements) {
       const x = width / 2 + p.x;
       const y = height / 2 + p.y;
+      if (p.arc) {
+        // a polar cell (Radial) draws as its sector, so the guide reads as
+        // rings at any spoke count — the outline helper places it under the slot
+        const pts = arcCellOutline(p);
+        c.beginPath();
+        pts.forEach((pt, i) => {
+          const px = width / 2 + pt.x, py = height / 2 + pt.y;
+          if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
+        });
+        c.closePath();
+        c.stroke();
+        c.beginPath();
+        c.arc(x, y, c.lineWidth * 1.5, 0, Math.PI * 2);
+        c.fill();
+        continue;
+      }
       if (p.w != null && p.h != null) {
         c.save();
         c.translate(x, y);

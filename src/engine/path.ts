@@ -2,7 +2,7 @@
 // geometry (Displace, Warp, Boolean) flatten curves to polylines first —
 // per-point operations on cubics would distort unevenly along the curve.
 
-import type { PathCmd, Rect, Transform2D } from './values';
+import type { PathCmd, Placement, Rect, Transform2D } from './values';
 
 export interface Pt {
   x: number;
@@ -12,6 +12,30 @@ export interface Pt {
 export interface Polyline {
   points: Pt[];
   closed: boolean;
+}
+
+/**
+ * The outline of an annular-sector cell (Radial's placements) as a closed
+ * polyline: out along one edge, around the outer arc, back along the other.
+ * A sector at the hub degenerates to a wedge — its inner edge is the center.
+ *
+ * The cell rides with its slot: it is drawn around the ring center the arc
+ * names, shifted by however far the placement has drifted from that cell's
+ * home (a Jitter offset), so the cell stays under the slot it belongs to.
+ */
+export function arcCellOutline(p: Placement, step = 4): Pt[] {
+  const { cx, cy, r0, r1, a0, a1 } = p.arc!;
+  const mid = (a0 + a1) / 2, rMid = (r0 + r1) / 2;
+  const dx = p.x - (cx + Math.cos(mid) * rMid);
+  const dy = p.y - (cy + Math.sin(mid) * rMid);
+  // enough segments that the outer arc's chords stay under `step` px
+  const n = Math.max(2, Math.min(256, Math.ceil((Math.abs(a1 - a0) * r1) / step)));
+  const at = (r: number, a: number): Pt => ({ x: cx + dx + Math.cos(a) * r, y: cy + dy + Math.sin(a) * r });
+  const pts: Pt[] = [];
+  for (let i = 0; i <= n; i++) pts.push(at(r1, a0 + ((a1 - a0) * i) / n));
+  if (r0 <= 0) pts.push(at(0, 0));
+  else for (let i = n; i >= 0; i--) pts.push(at(r0, a0 + ((a1 - a0) * i) / n));
+  return pts;
 }
 
 /** Flatten command lists to polylines. `step` is the target px between samples. */

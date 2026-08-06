@@ -12,10 +12,12 @@ import {
   edgeKey,
   hasPath,
   type Doc,
+  type Edge,
   type Frame,
   type Graph,
   type Layer,
   type NodeId,
+  type NodeInstance,
   type ParamValue,
 } from './engine/graph';
 import { canConnect } from './engine/registry';
@@ -75,6 +77,26 @@ const STORAGE_KEY = 'gfx.document.v2';
 const LEGACY_STORAGE_KEY = 'gfx.document.v1';
 const canPersist = typeof localStorage !== 'undefined';
 
+/**
+ * Random used to be two nodes in one: a generator with nothing wired, a jitter
+ * modulator with a layout wired in. The halves are separate node types now, so
+ * a save from before the split has Random nodes whose meaning lived in an edge.
+ * Retype those, in place: the param names carried over unchanged, and Jitter
+ * takes the same mask, so the wiring and the look survive. Without this the
+ * node would quietly fall back to generating a scatter and the layout it was
+ * jittering would go missing.
+ */
+export function migrateJitter(g: Graph): Graph {
+  const jittering = new Set(
+    g.edges.filter((e) => e.to.socket === 'layout' && g.nodes[e.to.node]?.type === 'Random')
+      .map((e) => e.to.node),
+  );
+  if (jittering.size === 0) return g;
+  const nodes = { ...g.nodes };
+  for (const id of jittering) nodes[id] = { ...nodes[id], type: 'Jitter' };
+  return { ...g, nodes };
+}
+
 function validGraph(g: Graph | null | undefined): g is Graph {
   if (!g || typeof g !== 'object' || !g.nodes || !Array.isArray(g.edges)) return false;
   // a save referencing node types this build no longer ships can't cook
@@ -98,7 +120,7 @@ function loadSavedDoc(): Doc | null {
           visible: l.visible !== false,
           opacity: Math.max(0, Math.min(1, Number(l.opacity ?? 1))),
           blendMode: BLEND_MODES.includes(l.blendMode) ? l.blendMode : 'normal',
-          graph: l.graph,
+          graph: migrateJitter(l.graph),
         });
       }
       return { frame: d.frame ?? DEFAULT_FRAME, layers };
@@ -107,7 +129,8 @@ function loadSavedDoc(): Doc | null {
     if (legacy) {
       const g = JSON.parse(legacy) as Graph;
       if (!validGraph(g)) return null;
-      return { frame: g.frame ?? DEFAULT_FRAME, layers: [makeLayer('layer_1', 'Layer 1', { nodes: g.nodes, edges: g.edges })] };
+      const migrated = migrateJitter(g);
+      return { frame: g.frame ?? DEFAULT_FRAME, layers: [makeLayer('layer_1', 'Layer 1', { nodes: migrated.nodes, edges: migrated.edges })] };
     }
     return null;
   } catch {
@@ -173,11 +196,19 @@ interface AppStore {
   moveNodes: (positions: Record<NodeId, { x: number; y: number }>) => void;
   addNode: (type: string, position: { x: number; y: number }) => void;
   removeNodes: (ids: NodeId[]) => void;
+  /** ⌘/Ctrl C — snapshot the selected nodes and the wires among them */
+  copySelection: () => void;
+  /** ⌘/Ctrl V — drop the snapshot into the active layer, offset and selected */
+  pasteClipboard: () => void;
   connect: (w: WireSpec) => void;
   removeEdges: (edgeKeys: string[]) => void;
+  /** replace the whole document with a starting graph — one undo step */
+  loadPreset: (doc: Doc) => void;
   selectLayer: (id: string) => void;
   /** insert a fresh layer (transparent Output, empty otherwise) above the active one */
   addLayer: () => void;
+  /** copy a layer — graph, blend mode, opacity and all — directly above itself */
+  duplicateLayer: (id: string) => void;
   /** refuses to remove the last layer — the document always has one */
   removeLayer: (id: string) => void;
   /** +1 raises the layer in the stack, -1 lowers it; no-op at the ends */
@@ -214,8 +245,52 @@ function revalidate(s: AppStore, doc: Doc): Pick<AppStore, 'activeLayerId' | 'se
   };
 }
 
+/**
+ * A copy of a layer's graph that shares nothing mutable with the original.
+ * Structural rather than a JSON round trip on purpose: an Image node's `src`
+ * holds a whole picture as a data URI, and copying the params object keeps
+ * that string shared (strings are immutable) where re-parsing would allocate
+ * a second copy of every byte.
+ *
+ * Node ids are copied verbatim — they are scoped to their graph, not the
+ * document (every layer's Output is `out`), so there is nothing to renumber.
+ */
+function cloneGraph(g: Graph): Graph {
+  const nodes: Record<NodeId, NodeInstance> = {};
+  for (const [id, n] of Object.entries(g.nodes)) {
+    nodes[id] = { ...n, params: { ...n.params }, ...(n.position ? { position: { ...n.position } } : {}) };
+  }
+  return { ...g, nodes, edges: g.edges.map((e) => ({ from: { ...e.from }, to: { ...e.to } })) };
+}
+
+/** The same copy, a whole document deep — what a preset is loaded through, so
+ * editing the loaded document never writes back into the preset constant. */
+function cloneDoc(d: Doc): Doc {
+  return { frame: { ...d.frame }, layers: d.layers.map((l) => ({ ...l, graph: cloneGraph(l.graph) })) };
+}
+
+/** "Layer 2" -> "Layer 2 copy" -> "Layer 2 copy 2": duplicating a duplicate
+ * counts up instead of stuttering, and never collides with a name in use. */
+function copyName(name: string, taken: Set<string>): string {
+  const base = name.replace(/ copy(?: \d+)?$/, '');
+  let candidate = `${base} copy`;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${base} copy ${n}`;
+  return candidate;
+}
+
 let nextId = 1;
 let nextLayerId = 2;
+
+/**
+ * The node clipboard. Deliberately neither document state nor React state: it
+ * survives undo (copying is not an edit), never reaches localStorage, and a
+ * copy shouldn't re-render the canvas. `pastes` counts repeats so a second
+ * paste cascades past the first instead of landing on top of it.
+ */
+let clipboard: { nodes: NodeInstance[]; edges: Edge[]; pastes: number } | null = null;
+
+/** each repeat paste steps this much further down-right of the original */
+const PASTE_OFFSET = 28;
 
 /** The history push that precedes a document edit. A `key` marks the edit as
  * continuous: repeats inside the coalescing window reuse the snapshot already
@@ -319,6 +394,59 @@ export const useApp = create<AppStore>((set, get) => ({
       };
     }),
 
+  copySelection: () => {
+    const s = get();
+    const graph = selectActiveGraph(s);
+    const ids = new Set(s.selectedNodeIds.filter((id) => graph.nodes[id]));
+    if (ids.size === 0) return; // nothing selected leaves the buffer alone
+    clipboard = {
+      nodes: [...ids].map((id) => ({ ...graph.nodes[id], params: { ...graph.nodes[id].params } })),
+      // only wires wholly inside the selection: a dangling half-wire would
+      // have nothing to reconnect to on paste
+      edges: graph.edges
+        .filter((e) => ids.has(e.from.node) && ids.has(e.to.node))
+        .map((e) => ({ from: { ...e.from }, to: { ...e.to } })),
+      pastes: 0,
+    };
+  },
+
+  pasteClipboard: () => {
+    if (!clipboard || clipboard.nodes.length === 0) return;
+    const buf = clipboard;
+    buf.pastes += 1;
+    const shift = PASTE_OFFSET * buf.pastes;
+    set((s) => {
+      const graph = selectActiveGraph(s);
+      // ids are minted against the graph being pasted INTO — pasting into
+      // another layer is normal, and its ids are its own namespace
+      const nodes = { ...graph.nodes };
+      const remap = new Map<NodeId, NodeId>();
+      for (const n of buf.nodes) {
+        let id = `${n.type.toLowerCase()}_${nextId++}`;
+        while (nodes[id]) id = `${n.type.toLowerCase()}_${nextId++}`;
+        remap.set(n.id, id);
+        nodes[id] = {
+          ...n,
+          id,
+          params: { ...n.params },
+          position: { x: (n.position?.x ?? 0) + shift, y: (n.position?.y ?? 0) + shift },
+        };
+      }
+      const edges = [
+        ...graph.edges,
+        ...buf.edges.map((e) => ({
+          from: { node: remap.get(e.from.node)!, socket: e.from.socket },
+          to: { node: remap.get(e.to.node)!, socket: e.to.socket },
+        })),
+      ];
+      return {
+        ...pushHistory(s, null),
+        doc: editActiveGraph(s, (g) => ({ ...g, nodes, edges })),
+        selectedNodeIds: [...remap.values()],
+      };
+    });
+  },
+
   removeNodes: (ids) =>
     set((s) => {
       const drop = new Set(ids);
@@ -358,6 +486,23 @@ export const useApp = create<AppStore>((set, get) => ({
       };
     }),
 
+  loadPreset: (preset) =>
+    set((s) => {
+      if (preset.layers.length === 0) return s;
+      // deep-copied on the way in: the preset constants are module state shared
+      // by every load, and the document that lands here is about to be edited
+      const doc = cloneDoc(preset);
+      return {
+        // a discrete edit (null key): a load never coalesces with the scrub or
+        // drag that came before it, so one ⌘Z always puts the old document back
+        ...pushHistory(s, null),
+        doc,
+        // the top layer, matching where a fresh document starts
+        activeLayerId: doc.layers[doc.layers.length - 1].id,
+        selectedNodeIds: [],
+      };
+    }),
+
   selectLayer: (id) =>
     set((s) => {
       if (s.activeLayerId === id || !s.doc.layers.some((l) => l.id === id)) return s;
@@ -381,6 +526,30 @@ export const useApp = create<AppStore>((set, get) => ({
         ...pushHistory(s, null),
         doc: { ...s.doc, layers },
         activeLayerId: id,
+        selectedNodeIds: [],
+      };
+    }),
+
+  duplicateLayer: (id) =>
+    set((s) => {
+      const at = s.doc.layers.findIndex((l) => l.id === id);
+      if (at === -1) return s;
+      const src = s.doc.layers[at];
+      let newId = `layer_${nextLayerId++}`;
+      while (s.doc.layers.some((l) => l.id === newId)) newId = `layer_${nextLayerId++}`;
+      const copy: Layer = {
+        ...src,
+        id: newId,
+        name: copyName(src.name, new Set(s.doc.layers.map((l) => l.name))),
+        graph: cloneGraph(src.graph),
+      };
+      // straight above the source, the way every layer panel does it — not
+      // above the active layer, since the row you clicked is the subject here
+      const layers = [...s.doc.layers.slice(0, at + 1), copy, ...s.doc.layers.slice(at + 1)];
+      return {
+        ...pushHistory(s, null),
+        doc: { ...s.doc, layers },
+        activeLayerId: newId,
         selectedNodeIds: [],
       };
     }),

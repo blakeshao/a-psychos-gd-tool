@@ -8,8 +8,11 @@ import {
   FilterLayoutNode,
   FunctionLayoutNode,
   GridNode,
+  JitterNode,
+  RadialNode,
   RandomLayoutNode,
   SamplePathNode,
+  ShuffleNode,
   WeightNode,
 } from './layout';
 import { NoiseNode } from './noise';
@@ -25,6 +28,7 @@ import {
   ToAlphaNode,
 } from './rasterOps';
 import { ShapeNode } from './shape';
+import { SliceNode } from './slice';
 import { TextNode } from './text';
 import { TraceNode } from './trace';
 import { OutlineImageNode } from './outlineImage';
@@ -41,8 +45,10 @@ export interface NodeCategory {
  * The node palette, grouped and ordered as proposed. This is the single source
  * of truth for what nodes exist — the registry is derived from it, and the
  * editor palette renders these sections in order. Categories whose nodes aren't
- * built yet (Fit to Box, Slice, Extraction, Alpha Map, Align/Distribute) are
- * intentionally absent until their nodes land.
+ * built yet (Fit to Box, Extraction, Align/Distribute) are intentionally absent
+ * until their nodes land. Slice landed under Placement rather than as its own
+ * category: it makes elements out of one input, which is Duplicator's job
+ * description with a layout deciding the cuts.
  */
 export const PALETTE: NodeCategory[] = [
   { category: 'Assets', nodes: [TextNode, ShapeNode, ImageNode, NoiseNode] },
@@ -51,9 +57,13 @@ export const PALETTE: NodeCategory[] = [
   { category: 'Raster ops', nodes: [BlurNode, DitherNode, AsciiNode, RecolorNode, ChromaKeyNode] },
   {
     category: 'Layout',
-    nodes: [GridNode, SamplePathNode, FunctionLayoutNode, RandomLayoutNode, WeightNode, FilterLayoutNode],
+    nodes: [
+      // generators first, then the modulators that rework an existing run
+      GridNode, RadialNode, SamplePathNode, FunctionLayoutNode, RandomLayoutNode,
+      WeightNode, FilterLayoutNode, JitterNode, ShuffleNode,
+    ],
   },
-  { category: 'Placement', nodes: [DuplicatorNode, PlaceNode] },
+  { category: 'Placement', nodes: [DuplicatorNode, SliceNode, PlaceNode] },
   // Flatten is Conversion's elements => vector step down the type ladder.
   {
     category: 'Conversion',

@@ -4,7 +4,7 @@
 
 A node-based graphic design tool that runs in the browser, on the GPU. You build a poster by wiring nodes on a canvas: text is shaped into vector outlines, vectors are warped and combined, rasters are blurred and dithered — every conversion is an explicit node on a typed wire, never a hidden coercion. The engine only re-computes what a change actually touches, so dragging a parameter stays interactive even in deep graphs.
 
-**Status:** experimental, under active development. 31 node types; undo/redo is built in (⌘/Ctrl Z, ⇧⌘/Ctrl Z); persistence is not built yet (see [Roadmap](#roadmap)).
+**Status:** experimental, under active development. 35 node types; undo/redo is built in (⌘/Ctrl Z, ⇧⌘/Ctrl Z); persistence is not built yet (see [Roadmap](#roadmap)).
 
 ## Requirements
 
@@ -18,7 +18,9 @@ A node-based graphic design tool that runs in the browser, on the GPU. You build
 npm run dev          # open the printed URL in a WebGPU browser
 ```
 
-You'll get a default graph cooking to the artboard. Add nodes from the palette, drag wires between sockets — handle colors encode socket types, and illegal wires are rejected on drag. Canvas navigation is Figma-style: two-finger trackpad scroll pans and pinch zooms (space+drag or the middle/right button also pan); left-drag draws a box that selects every node it touches, and ⌘/shift-click adds single nodes to the selection. The selection moves or deletes (⌫) as a group — a group move is a single undo step.
+You'll get a default graph cooking to the artboard. Add nodes from the palette, drag wires between sockets — handle colors encode socket types, and illegal wires are rejected on drag. Canvas navigation is Figma-style: two-finger trackpad scroll pans and pinch zooms (space+drag or the middle/right button also pan); left-drag draws a box that selects every node it touches, and ⌘/shift-click adds single nodes to the selection. The selection moves or deletes (⌫) as a group — a group move is a single undo step. ⌘/Ctrl C then ⌘/Ctrl V copies the selected nodes, keeping the wires that ran between them; repeat pastes cascade, and pasting into a different layer moves work between graphs.
+
+The **presets** panel in the canvas' lower right holds the starting documents — *multi-layer*, the four-layer poster that is also the first-run document, and *image grid collage*, the one-layer `Slice → Shuffle → Place` mosaic. Loading one replaces the whole document (frame, layers and all) as a single undo step, so ⌘/Ctrl Z puts your work back.
 
 Other commands:
 
@@ -40,13 +42,26 @@ Values on wires are typed: `text`, `vector`, `raster`, `alpha`, `layout`, `eleme
 
 **Output is the artboard.** It composites elements natively in z-order — vector and text content batches through the 2D tessellator, raster content quad-draws its texture with the element's transform, all GPU-side. Placing things on the artboard never needed the conversion ladder. A minimal scatter graph is four nodes: `Shape → Place ← Grid`, `Place → Output`.
 
+### Slicing an image, seamlessly
+
+**Slice** cuts a raster along a layout's cells — one tile per cell, all of them windows onto the same texture, so a 12×12 slice allocates nothing. It has no params on purpose: the layout decides every cut, which is what keeps the tiles congruent to the slots they later land on. Feed one Grid to both sides and the mosaic cannot come apart.
+
+```
+Grid ─┬─→ Slice ← Image
+      └─→ Shuffle → Place (by-index) → Output
+```
+
+**Shuffle** is the scramble that survives non-uniform cells. A flat permutation of slots does not: under a fibonacci or geometric distribution no two cells are congruent, so swapping any two leaves an overlap and a hole. So `tracks` mode permutes whole columns and rows instead — each track keeps its size and takes another's position, which always tiles exactly, because the same widths are being summed in a different order. `cells` mode permutes cells only among the cells congruent to them: a full scatter on a uniform grid, the identity on a strictly-increasing one. Both leave slot identity alone, so Place's by-index join puts tile *k* on slot *k*'s new home.
+
+Wire `Slice → Output` with nothing between and the image reassembles pixel for pixel — `scripts/slice-check.mjs` checks exactly that on a real GPU.
+
 ### The frame
 
 The document has one **frame** (artboard size), edited in the sidebar and stored in the document. Frame-aware nodes — Rasterize, Noise, Output — cook at frame resolution via `ctx.frame` and declare `usesFrame`, so the evaluator folds the frame into their content hash. Changing the frame re-cooks exactly those nodes and their descendants; text shaping and vector geometry stay cached. There are no per-node resolution params.
 
 ### Layers
 
-The document is an ordered stack of **layers**, and each layer is its own complete node graph with its own Output. The layers panel (over the viewport) reorders the stack, toggles visibility, and switches which graph the node editor shows; the stack composites bottom-to-top on the GPU with a per-layer **opacity** and **blend mode** — the full Photoshop set (multiply, screen, overlay, color dodge/burn, vivid/linear/pin light, hard mix, difference, divide, hue, saturation, color, luminosity, …). A new layer's Output starts transparent so the layers below show through; layers keep independent cook caches, so editing one never re-cooks the others.
+The document is an ordered stack of **layers**, and each layer is its own complete node graph with its own Output. The layers panel (over the viewport) reorders the stack, toggles visibility, duplicates a layer (graph, blend mode and opacity included, inserted directly above the original), and switches which graph the node editor shows; the stack composites bottom-to-top on the GPU with a per-layer **opacity** and **blend mode** — the full Photoshop set (multiply, screen, overlay, color dodge/burn, vivid/linear/pin light, hard mix, difference, divide, hue, saturation, color, luminosity, …). A new layer's Output starts transparent so the layers below show through; layers keep independent cook caches, so editing one never re-cooks the others.
 
 ### Caching
 
@@ -75,13 +90,17 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 | Chroma Key | `raster → raster` | Keys a color out to transparency, with tolerance and softness. |
 | **Layout** | | The slot lane: decide what placement slots exist and what signals ride on them — Place decides how elements meet them. |
 | Grid | `(raster/alpha mask?) → layout` | Weighted rows × columns over the frame's padded content box — per-axis track distributions (uniform / fibonacci / golden / geometric / custom / expression), gaps, stagger, fill flow. A mask decides which cells exist. |
+| Radial | `(raster/alpha mask?) → layout` | Grid in polar coordinates: concentric rings of cells over an annulus, centered anywhere on the artboard, with the same weighted track distributions on the radius and the sector angle, a gutter between rings, stagger and fill flow. A cell is an annular sector, so the spoke count only cuts the rings up — it never changes them. A mask decides which cells exist. |
 | Sample Path | `vector (+ raster/alpha mask?) → layout` | Even arc-length samples along a path, with optional tangent rotation; progress = position along the path. A mask trims samples to its coverage. |
 | Math Function | `(raster/alpha mask?) → layout` | Even arc-length slots along a circle, spiral, or wave — the gap decides how many fit the curve. A mask trims slots to its coverage. |
-| Random | `layout? (+ raster/alpha mask?) → layout` | Standalone: random placements in an area — uniform, poisson-disk, or gaussian, with spacing as the density knob (poisson: the min distance); a mask trims them to its coverage. Wired: seeded jitter (offset / rotation / scale) on an upstream layout, constrained to the mask. |
+| Random | `(raster/alpha mask?) → layout` | Random placements in an area — uniform, poisson-disk, or gaussian, with spacing as the density knob (poisson: the min distance); a mask trims them to its coverage. |
 | Weight | `layout (+ raster?) → layout` | Writes a signal channel onto each slot — noise, image luma/alpha/saturation, progress, cell area, distance from center, or an expression — for Place and Filter to read. |
 | Filter | `layout → layout` | Prunes slots: every nth, channel threshold, or random keep. Survivors keep their identity for by-index Place. |
+| Jitter | `layout (+ raster/alpha mask?) → layout` | Seeded slop on an existing layout — offset / rotation / scale, with a mask constraining movement rather than existence. |
+| Shuffle | `layout → layout` | Rearranges slots without breaking the tiling: `tracks` permutes whole columns and rows (seamless under any distribution), `cells` permutes each cell among the cells congruent to it, rotation travelling with the position (so a Radial ring's cells swap without going crooked). |
 | **Placement** | | The element lane: decide how many things exist and marry them to layout slots. |
 | Duplicator | `any → elements` | Makes N copies of its input as elements — content shared, transforms independent until Place. |
+| Slice | `raster, layout → elements` | Cuts an image along a layout's cells, one tile per cell. No params: the layout decides every cut, so tiles stay congruent to the slots they're placed onto. Tiles share the source texture (a window each), so slicing costs nothing. |
 | Place | `elements, layout → elements` | Assigns elements to layout slots — in order, keyed by index, or spread evenly along the layout — and binds slot signals to scale / rotation / blur. |
 | **Conversion** | | The explicit type-changing steps — every rung of the `text => vector => raster` ladder, up and down. |
 | Outline Text | `text → vector` | Glyphs become paths — the explicit step down the ladder from live type to geometry. |
@@ -90,7 +109,7 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 | Remove Background | `raster → raster` | Segments the foreground subject (RMBG-1.4 via Transformers.js, in a worker) and folds the mask into the image's alpha. |
 | Outline Image | `raster → vector` | Traces a hollow outline around the image's alpha silhouette — pairs with Remove Background. |
 | To Alpha | `raster → alpha` | Extracts a mask from luminance or alpha, optionally inverted, cut at an explicit threshold (softness feathers the edge; note luminance reads transparency as white paper). |
-| Draw Layout | `layout → vector` | Renders slots as debug geometry — cell rects for grids, dot-and-tick markers elsewhere. |
+| Draw Layout | `layout → vector` | Renders slots as debug geometry — cell rects for grids, annular sectors for radial cells, dot-and-tick markers elsewhere. |
 | Flatten | `elements → vector` | Collapses placed elements into one vector, baking each element's transform into its paths. |
 | **Composition** | | Merge separate lanes into one image before (or instead of) the artboard. |
 | Composite | `raster/elements ×2 (+ alpha?) → raster` | Blends overlay onto base (normal / multiply / screen / overlay) with opacity and an optional mask. |
@@ -110,11 +129,12 @@ Evaluation is pull-based from Output with hash-keyed memoization: a node's key i
 
 ### Dev scripts
 
-Two Puppeteer smoke-test scripts drive a real (headed) Chrome against a running dev server, since WebGPU needs a GPU:
+Three Puppeteer smoke-test scripts drive a real (headed) Chrome against a running dev server, since WebGPU needs a GPU:
 
 ```sh
 node scripts/verify.mjs [url]       # cold cook, cache-hit check on edit, wire type-checking
 node scripts/blur-check.mjs [url]   # renders a heavy blur and screenshots the halo
+node scripts/slice-check.mjs [url]  # Slice reassembles the source pixel for pixel; renders a shuffled mosaic
 ```
 
 Both default to `http://localhost:5199/` (pass your dev server's URL) and locate Chrome at the standard macOS path — set the `CHROME` env var to point elsewhere on Linux/Windows.
@@ -129,6 +149,7 @@ Both default to `http://localhost:5199/` (pass your dev server's URL) and locate
 4. ~~Vector ops (Shape, Displace, Warp, Boolean) + Trace~~ (vector Slice deferred)
 5. ~~Elements & layout: Split, Duplicator, Place, Flatten, Grid, Random, SamplePath, Function, Filter, Weight, DrawLayout~~ (~~Alpha Map~~ landed as the generators' mask input)
 6. ~~Export & undo/redo~~
+7. ~~Slice & Shuffle: image mosaics that stay seamless on non-uniform grids~~
 
 ### Planned
 
