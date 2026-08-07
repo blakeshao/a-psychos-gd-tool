@@ -116,6 +116,13 @@ export interface Element {
    * renderer to vector/text content; raster elements ignore it for now, and
    * Flatten drops it (blur is a raster-space effect). */
   blur?: number;
+  /** A window into raster content, in normalized (0..1) texture space — Slice
+   * writes it so N tiles can share one texture instead of cutting N of them.
+   * Absent reads as the whole texture. The window, not the texture, fixes the
+   * element's drawn size; sampling clamps to it, so a scaled or rotated tile
+   * replicates its own edge instead of bleeding in its neighbour. Meaningless
+   * on vector/text content, where the geometry is its own extent. */
+  srcRect?: Rect;
 }
 
 export interface ElementsValue {
@@ -158,6 +165,21 @@ export interface Placement {
    * treating placements as points. */
   w?: number;
   h?: number;
+  /** The cell as an annular sector (Radial): radii `r0..r1` and angles
+   * `a0..a1` around the ring center `cx, cy`, all in layout space — the center
+   * rides along so a slot still knows its own cell after the rings are moved.
+   * Present alongside w/h, which are the same cell straightened (its extents in
+   * the slot's own frame) for the consumers that only know rectangles.
+   * Cell-shape consumers draw this instead, so the sectors of a ring always add
+   * back up to that ring however finely the spokes cut it. */
+  arc?: { cx: number; cy: number; r0: number; r1: number; a0: number; a1: number };
+  /** Track identity — present when the layout is a separable lattice (Grid), so
+   * a slot knows which column and row it was born in even after a Filter
+   * prunes its neighbours. Shuffle's tracks mode permutes on these: inferring
+   * tracks from coordinates instead would mistake a staggered row for a second
+   * column. Absent on every non-lattice layout. */
+  col?: number;
+  row?: number;
 }
 
 /**

@@ -135,11 +135,20 @@ export class GpuContext {
    * coeffs: [a, b, c, d, tx, ty, w, h] — clip = [a b; c d]·local_px + [tx ty],
    * local_px spanning the content size (w, h).
    *
+   * win: a normalized window into src the quad samples through — [u, v, du, dv],
+   * defaulting to the whole texture. Sampling clamps inside it, so a tile never
+   * bleeds in what sits outside its own rect.
+   *
    * src is straight alpha; dst accumulates PREMULTIPLIED. Run an 'unpremul'
    * pass over dst after the last quad before handing it to any straight-alpha
    * consumer.
    */
-  drawQuad(src: TexSource, dst: PooledTexture, coeffs: Float32Array<ArrayBuffer>) {
+  drawQuad(
+    src: TexSource,
+    dst: PooledTexture,
+    coeffs: Float32Array<ArrayBuffer>,
+    win: readonly [number, number, number, number] = [0, 0, 1, 1],
+  ) {
     // render through the sRGB view: dst bytes stay sRGB-encoded, but the
     // fixed-function blend decodes to linear light around the src-over —
     // blending gamma bytes puts a dark rim on soft edges (blur, AA)
@@ -172,9 +181,10 @@ export class GpuContext {
       });
       this.pipelines.set(key, pipeline);
     }
-    // uniform layout: abcd (vec4) + txty (vec2) + size (vec2) = 32 bytes
-    const u = new Float32Array(8);
+    // uniform layout: abcd (vec4) + txty (vec2) + size (vec2) + win (vec4) = 48 bytes
+    const u = new Float32Array(12);
     u.set([coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5], coeffs[6], coeffs[7]]);
+    u.set(win, 8);
     this.device.queue.writeBuffer(this.uniforms, 0, u);
     const bindGroup = this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),

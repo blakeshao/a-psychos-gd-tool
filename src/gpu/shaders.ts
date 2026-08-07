@@ -196,6 +196,9 @@ struct QuadU {
   abcd: vec4f,
   txty: vec2f,
   size: vec2f, // content size in px
+  // window into the source texture, normalized (origin.xy, extent.xy).
+  // (0,0,1,1) is the whole texture — what every caller but Slice passes.
+  win: vec4f,
 }
 // no sampler: filtering is manual (texelPremul) — layout:'auto' would strip
 // an unused sampler binding, so none is declared or bound
@@ -233,9 +236,11 @@ fn qsrgb2lin(c: vec3f) -> vec3f {
 }
 
 // one texel, premultiplied in linear light (clamp replicates the edge,
-// matching clamp-to-edge addressing)
-fn texelPremul(p: vec2i, dims: vec2i) -> vec4f {
-  let t = textureLoad(tex, clamp(p, vec2i(0), dims - 1), 0);
+// matching clamp-to-edge addressing). lo/hi bound the window, not the
+// texture: a tile clamps to its own rect, so scaling one up replicates its
+// edge row instead of dragging in the neighbouring tile's pixels.
+fn texelPremul(p: vec2i, lo: vec2i, hi: vec2i) -> vec4f {
+  let t = textureLoad(tex, clamp(p, lo, hi), 0);
   return vec4f(qsrgb2lin(t.rgb) * t.a, t.a);
 }
 
@@ -246,12 +251,16 @@ fn fs(in: QVSOut) -> @location(0) vec4f {
   // texels into every scaled/rotated edge — a dark rim around soft shapes.
   // Premultiplying each texel first keeps invisible texels weightless.
   let dims = vec2i(textureDimensions(tex));
-  let st = in.uv * vec2f(dims) - 0.5;
+  let fdims = vec2f(dims);
+  // the quad's unit square maps onto the window, not the whole texture
+  let st = (u.win.xy + in.uv * u.win.zw) * fdims - 0.5;
+  let lo = clamp(vec2i(floor(u.win.xy * fdims)), vec2i(0), dims - 1);
+  let hi = clamp(vec2i(ceil((u.win.xy + u.win.zw) * fdims)) - 1, lo, dims - 1);
   let base = vec2i(floor(st));
   let f = fract(st);
   let c = mix(
-    mix(texelPremul(base, dims), texelPremul(base + vec2i(1, 0), dims), f.x),
-    mix(texelPremul(base + vec2i(0, 1), dims), texelPremul(base + vec2i(1, 1), dims), f.x),
+    mix(texelPremul(base, lo, hi), texelPremul(base + vec2i(1, 0), lo, hi), f.x),
+    mix(texelPremul(base + vec2i(0, 1), lo, hi), texelPremul(base + vec2i(1, 1), lo, hi), f.x),
     f.y);
   // the target view is sRGB: emit linear, the hardware re-encodes on store.
   // src-over then blends in linear light — blending gamma bytes darkens

@@ -7,11 +7,15 @@
 // slots to its coverage, born as a clean run (unlike Filter, which prunes a
 // run that already exists, by signal rather than area). Weight authors the
 // weight channel deliberately; Filter prunes slots (the only lane node that
-// deletes existing geometry). Ordering is NOT a lane concern — Place owns the element↔slot
+// deletes existing geometry); Jitter adds seeded slop; Shuffle rearranges
+// slots without disturbing the tiling. Every modulator leaves index and
+// progress alone — they are slot identity, and Place's by-index join is only
+// worth anything because nothing rewrites them.
+// Ordering is NOT a lane concern — Place owns the element↔slot
 // mapping (elements.ts). Draw Layout renders slots as geometry. Channel
 // contract: Placement in values.ts.
 
-import { boundsOfPaths, flattenPaths, polylinesToPaths, samplePathEvenly } from '../engine/path';
+import { arcCellOutline, boundsOfPaths, flattenPaths, polylinesToPaths, samplePathEvenly } from '../engine/path';
 import type { CookContext, NodeDef, SocketSpec } from '../engine/registry';
 import { readChannel, type AlphaValue, type LayoutValue, type PathCmd, type Placement, type RasterValue, type VectorValue } from '../engine/values';
 import { compileExpr } from '../util/expr';
@@ -195,6 +199,10 @@ export const GridNode: NodeDef = {
       index: 0,
       w: tx.sizes[c],
       h: ty.sizes[r],
+      // track identity, so Shuffle can permute whole columns/rows exactly
+      // rather than guessing tracks back out of coordinates
+      col: c,
+      row: r,
     });
 
     // emit in fill order; index = slot identity, progress = position along that order
@@ -217,30 +225,174 @@ export const GridNode: NodeDef = {
   },
 };
 
-export const RandomLayoutNode: NodeDef = {
-  type: 'Random',
-  inputs: [{ name: 'layout', type: 'layout', optional: true }, MASK_INPUT],
+const DEG = Math.PI / 180;
+
+/**
+ * Radial — Grid in polar coordinates: concentric rings of cells. Same bones as
+ * Grid (two weighted axes, gaps, stagger, fill order), with x/y swapped for
+ * radius/angle — so `distR: fibonacci` gives rings that thicken outward and
+ * `distA: custom` gives uneven sectors, both out of the same `axisWeights`.
+ *
+ * The rings are the picture and the spokes only cut them up: a cell is an
+ * annular sector (`arc`), so any spoke count partitions the same rings — 3
+ * spokes or 300, the ring the cells add up to is identical, and only the
+ * internal cuts move. That is why there is no angular gutter to pair with
+ * gapRadial (gapRadial separates whole rings, which is still concentric
+ * rings): a gap between sectors would let the spoke count change the picture.
+ * Cells also carry the straightened `w`/`h` — the sector's arc extent at its
+ * mid radius and its radial thickness, in the slot's own frame — for the
+ * consumers that only know rectangles (Slice's window, Shuffle's congruence).
+ *
+ * No col/row, deliberately: rings and spokes are tracks, but not the separable
+ * cartesian kind Shuffle's tracks mode shifts along an axis — permuting them
+ * that way would tear the rings apart. Absent keys make that mode a no-op
+ * here; `cells` mode still works and is exactly right, because a ring's cells
+ * are congruent to each other and to nothing else.
+ */
+export const RadialNode: NodeDef = {
+  type: 'Radial',
+  inputs: [MASK_INPUT],
   outputs: [{ name: 'out', type: 'layout' }],
   params: [
-    // generate mode (no input): random placements in an area. spacing is the
-    // density knob — how many fit follows from area / spacing² (poisson-disk
-    // reads it as the min distance and packs until the stream runs dry)
+    { name: 'rings', kind: 'number', default: 4, min: 1, max: 64, step: 1 },
+    // how many cells each ring is cut into — the rings look the same either way
+    { name: 'spokes', kind: 'number', default: 12, min: 1, max: 256, step: 1 },
+    // the annulus the rings subdivide; an inner radius punches the hole out
+    { name: 'innerRadius', kind: 'number', default: 0, min: 0, max: 2000, step: 1 },
+    { name: 'radius', kind: 'number', default: 300, min: 1, max: 2000, step: 1 },
+    // where the rings are centered — layout space is origin-at-center, so 0,0
+    // is the artboard's middle and this walks the whole target off it
+    { name: 'centerX', kind: 'number', default: 0, min: -2000, max: 2000, step: 1 },
+    { name: 'centerY', kind: 'number', default: 0, min: -2000, max: 2000, step: 1 },
+    // the gutter between whole rings — a band of paper, still concentric rings
+    { name: 'gapRadial', kind: 'number', default: 0, min: 0, max: 600, step: 1 },
+    // degrees; -90 starts at 12 o'clock, like Function's circle
+    { name: 'startAngle', kind: 'number', default: -90, min: -360, max: 360, step: 1 },
+    { name: 'sweep', kind: 'number', default: 360, min: 1, max: 360, step: 1 },
+    // track distribution per axis — same generators as Grid
+    { name: 'distR', kind: 'select', options: DIST_OPTIONS, default: 'uniform' },
+    { name: 'distA', kind: 'select', options: DIST_OPTIONS, default: 'uniform' },
+    { name: 'ratioR', kind: 'number', default: 1.618, min: 0.1, max: 5, step: 0.01, showIf: { param: 'distR', in: ['geometric'] } },
+    { name: 'ratioA', kind: 'number', default: 1.618, min: 0.1, max: 5, step: 0.01, showIf: { param: 'distA', in: ['geometric'] } },
+    { name: 'weightsR', kind: 'string', default: '1,1,2,3,5', showIf: { param: 'distR', in: ['custom'] } },
+    { name: 'weightsA', kind: 'string', default: '1,1,2,3,5', showIf: { param: 'distA', in: ['custom'] } },
+    { name: 'exprR', kind: 'string', default: '1 + sin(t*pi)', showIf: { param: 'distR', in: ['expression'] } },
+    { name: 'exprA', kind: 'string', default: '1 + sin(t*pi)', showIf: { param: 'distA', in: ['expression'] } },
+    { name: 'reverseR', kind: 'select', options: ['no', 'yes'], default: 'no', showIf: { param: 'distR', in: NONUNIFORM } },
+    { name: 'reverseA', kind: 'select', options: ['no', 'yes'], default: 'no', showIf: { param: 'distA', in: NONUNIFORM } },
+    // brick offset, polar: turn every other ring by half a sector
+    { name: 'stagger', kind: 'select', options: ['none', 'rings'], default: 'none' },
+    // what the slot's rotation means — tangent rides the ring, radial points out
+    { name: 'orient', kind: 'select', options: ['tangent', 'radial', 'none'], default: 'tangent' },
+    { name: 'flow', kind: 'select', options: ['rings', 'spokes', 'serpentine'], default: 'rings' },
+  ],
+  async cook(inputs, params, ctx) {
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
+    const rings = Math.max(1, Math.round(Number(params.rings)));
+    const inner = Math.max(0, Number(params.innerRadius));
+    const outer = Math.max(inner, Number(params.radius));
+    const gapR = Number(params.gapRadial);
+    const cx = Number(params.centerX ?? 0), cy = Number(params.centerY ?? 0);
+    const start = Number(params.startAngle) * DEG;
+    const sweep = Math.max(0, Math.min(360, Number(params.sweep))) * DEG;
+    const full = Math.abs(sweep - Math.PI * 2) < 1e-9;
+
+    // the radial axis is Grid's axis, verbatim: weighted tracks over the
+    // annulus, gaps taken out of the span first
+    const rTracks = axisTracks(
+      axisWeights(rings, String(params.distR), {
+        ratio: Number(params.ratioR), list: String(params.weightsR ?? ''),
+        expr: String(params.exprR ?? ''), reverse: params.reverseR === 'yes',
+      }),
+      gapR, outer - inner,
+    );
+
+    const spokes = Math.max(1, Math.round(Number(params.spokes)));
+    // the angular axis: sectors partition the sweep by weight — cells cover it
+    // rather than sampling it, so a 180° fan is half a dial, not a run pinned
+    // to both ends. Every ring is cut the same way, so the cuts line up across
+    // the rings unless stagger says otherwise
+    const aTracks = axisTracks(
+      axisWeights(spokes, String(params.distA), {
+        ratio: Number(params.ratioA), list: String(params.weightsA ?? ''),
+        expr: String(params.exprA ?? ''), reverse: params.reverseA === 'yes',
+      }),
+      0, sweep,
+    );
+
+    const cell = (k: number, c: number): Placement => {
+      const r0 = inner + rTracks.centers[k] - rTracks.sizes[k] / 2;
+      const r1 = r0 + rTracks.sizes[k];
+      const r = (r0 + r1) / 2;
+      // stagger turns the odd rings by half of the sector the cell sits in
+      const half = params.stagger === 'rings' && k % 2 === 1 ? aTracks.sizes[c] / 2 : 0;
+      const a0 = start + aTracks.centers[c] - aTracks.sizes[c] / 2 + half;
+      const a1 = a0 + aTracks.sizes[c];
+      const theta = (a0 + a1) / 2;
+      return {
+        x: cx + Math.cos(theta) * r,
+        y: cy + Math.sin(theta) * r,
+        rotation: params.orient === 'none' ? 0 : params.orient === 'radial' ? theta : theta + Math.PI / 2,
+        scale: 1,
+        progress: 0,
+        weight: 0, // normalized against the biggest cell below
+        index: 0,
+        // the cell as a sector, and the same cell straightened
+        arc: { cx, cy, r0, r1, a0, a1 },
+        w: aTracks.sizes[c] * r,
+        h: rTracks.sizes[k],
+      };
+    };
+
+    // emit in fill order — rings walks ring by ring (serpentine reverses the
+    // odd ones), spokes walks outward along each spoke
+    const placementsInOrder: Placement[] = [];
+    if (params.flow === 'spokes') {
+      for (let c = 0; c < spokes; c++) for (let k = 0; k < rings; k++) placementsInOrder.push(cell(k, c));
+    } else {
+      for (let k = 0; k < rings; k++)
+        for (let c = 0; c < spokes; c++)
+          placementsInOrder.push(cell(k, params.flow === 'serpentine' && k % 2 === 1 ? spokes - 1 - c : c));
+    }
+    let placements = placementsInOrder;
+
+    // the rings are fixed by the params; the mask decides which cells exist.
+    // Masking happens before index/progress, so the slots are born a clean run
+    const total = placements.length;
+    if (inMask) placements = placements.filter((p) => inMask(p.x, p.y));
+    // same density signal as Grid: cell area against the biggest cell
+    const maxArea = Math.max(...placements.map((p) => p.w! * p.h!), 0);
+    placements.forEach((p, i) => {
+      p.index = i;
+      p.progress = placements.length === 1 ? 0 : i / (placements.length - 1);
+      p.weight = maxArea > 0 ? (p.w! * p.h!) / maxArea : 1;
+    });
+    // one full ring is a loop, like Function's circle — Place's spread wraps
+    // across the closing sector. A mask that trimmed anything cut it open
+    const closed = rings === 1 && full && placements.length === total ? true : undefined;
+    return { out: { kind: 'layout', placements, closed } satisfies LayoutValue };
+  },
+};
+
+export const RandomLayoutNode: NodeDef = {
+  type: 'Random',
+  inputs: [MASK_INPUT],
+  outputs: [{ name: 'out', type: 'layout' }],
+  params: [
+    // random placements in an area. spacing is the density knob — how many fit
+    // follows from area / spacing² (poisson-disk reads it as the min distance
+    // and packs until the stream runs dry)
     { name: 'distribution', kind: 'select', options: ['uniform', 'poisson-disk', 'gaussian'], default: 'uniform' },
     { name: 'spacing', kind: 'number', default: 100, min: 10, max: 500, step: 1 },
     { name: 'areaWidth', kind: 'number', default: 600, min: 10, max: 4096, step: 1 },
     { name: 'areaHeight', kind: 'number', default: 400, min: 10, max: 4096, step: 1 },
-    // modulate mode (input wired): seeded jitter on existing placements
-    { name: 'offset', kind: 'number', default: 0, min: 0, max: 300, step: 1 },
-    { name: 'rotate', kind: 'number', default: 0, min: 0, max: 3.14, step: 0.01 },
-    { name: 'scaleJitter', kind: 'number', default: 0, min: 0, max: 1, step: 0.01 },
     { name: 'seed', kind: 'number', default: 1, min: 0, max: 9999, step: 1 },
   ],
   async cook(inputs, params, ctx) {
     const seed = Number(params.seed);
-    const upstream = inputs.layout as LayoutValue | undefined;
     const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
 
-    if (!upstream) {
+    {
       const w = Number(params.areaWidth), h = Number(params.areaHeight);
       const spacing = Math.max(1, Number(params.spacing ?? 100));
       const gaussian = params.distribution === 'gaussian';
@@ -285,7 +437,37 @@ export const RandomLayoutNode: NodeDef = {
       }));
       return { out: { kind: 'layout', placements } satisfies LayoutValue };
     }
+  },
+};
 
+/**
+ * Jitter: seeded slop on an existing layout — the modulator half of what used
+ * to be Random's wired mode. Split out because a node whose meaning flipped on
+ * whether an optional input happened to be wired hid half its behaviour from
+ * the palette, and because the two halves compose: Grid → Shuffle → Jitter is
+ * a scrambled mosaic with a little slop on top, which one dual-mode node could
+ * never express.
+ *
+ * rotate/scaleJitter overlap Weight(noise) → Place bind, deliberately: these
+ * write the SLOT, so Draw Layout shows them and downstream lane nodes see
+ * them, where a bind writes the element at the very end. offset has no
+ * equivalent at all — position is not a bind target (BIND_TARGETS in
+ * elements.ts), and nothing else in the lane is mask-aware while moving.
+ */
+export const JitterNode: NodeDef = {
+  type: 'Jitter',
+  inputs: [{ name: 'layout', type: 'layout' }, MASK_INPUT],
+  outputs: [{ name: 'out', type: 'layout' }],
+  params: [
+    { name: 'offset', kind: 'number', default: 0, min: 0, max: 300, step: 1 },
+    { name: 'rotate', kind: 'number', default: 0, min: 0, max: 3.14, step: 0.01 },
+    { name: 'scaleJitter', kind: 'number', default: 0, min: 0, max: 1, step: 0.01 },
+    { name: 'seed', kind: 'number', default: 1, min: 0, max: 9999, step: 1 },
+  ],
+  async cook(inputs, params, ctx) {
+    const seed = Number(params.seed);
+    const upstream = inputs.layout as LayoutValue;
+    const inMask = await maskTest(inputs.mask as RasterValue | AlphaValue | undefined, ctx);
     const off = Number(params.offset), rot = Number(params.rotate), sj = Number(params.scaleJitter);
     const placements = upstream.placements.map((p, i) => {
       // masked jitter constrains movement, not existence: take the first
@@ -306,6 +488,142 @@ export const RandomLayoutNode: NodeDef = {
       };
     });
     // jitter moves points; a ring is still a ring
+    return { out: { kind: 'layout', placements, closed: upstream.closed } satisfies LayoutValue };
+  },
+};
+
+/** Seeded Fisher-Yates over 0..n-1. salt decorrelates the two axes' draws. */
+function permutation(n: number, seed: number, salt: number): number[] {
+  const perm = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(latticeHash(i, salt, seed) * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  return perm;
+}
+
+/**
+ * Permute one axis' tracks: each track keeps its size and moves to another
+ * track's position. Returns a per-track shift, so a cell's stagger offset
+ * (a delta from its track's edge) survives the move untouched.
+ *
+ * Seamlessness is the point. A flat permutation of non-uniform CELLS is not
+ * seamless — under fibonacci or geometric no two cells are congruent, so
+ * swapping any two leaves an overlap and a hole. Permuting whole tracks always
+ * tiles exactly, because the widths being summed are the same multiset in a
+ * different order: the run still ends where it started. The gap sequence stays
+ * with the positions rather than the tracks, for the same reason.
+ */
+function shiftTracks(
+  placements: Placement[],
+  key: (p: Placement) => number | undefined,
+  extent: (p: Placement) => number | undefined,
+  pos: (p: Placement) => number,
+  seed: number,
+  salt: number,
+): Map<number, number> | null {
+  const tracks = new Map<number, { left: number; size: number }>();
+  for (const p of placements) {
+    const k = key(p), e = extent(p);
+    if (k === undefined || e === undefined) return null; // not a lattice: leave it alone
+    const left = pos(p) - e / 2;
+    const seen = tracks.get(k);
+    // a staggered row shifts its cells off the track edge; the track is the
+    // leftmost variant, and every cell keeps its offset from it
+    if (!seen) tracks.set(k, { left, size: e });
+    else if (left < seen.left) seen.left = left;
+  }
+  if (tracks.size < 2) return null;
+
+  const order = [...tracks.keys()].sort((a, b) => tracks.get(a)!.left - tracks.get(b)!.left);
+  const gaps: number[] = [];
+  for (let i = 0; i < order.length - 1; i++) {
+    const cur = tracks.get(order[i])!, next = tracks.get(order[i + 1])!;
+    gaps.push(next.left - (cur.left + cur.size));
+  }
+
+  const perm = permutation(order.length, seed, salt);
+  const shift = new Map<number, number>();
+  let cursor = tracks.get(order[0])!.left;
+  perm.forEach((from, at) => {
+    const k = order[from];
+    const t = tracks.get(k)!;
+    shift.set(k, cursor - t.left);
+    cursor += t.size + (gaps[at] ?? 0);
+  });
+  return shift;
+}
+
+/**
+ * Shuffle: rearrange a layout's slots without disturbing the tiling.
+ *
+ * A modulator, like Filter and Jitter — index and progress are slot identity
+ * and no node here rewrites them, so a Place in by-index mode still lands
+ * element k on slot k, at its new home. That join is what makes Slice's tiles
+ * follow the shuffle while staying exactly the size of the cell they land in.
+ */
+export const ShuffleNode: NodeDef = {
+  type: 'Shuffle',
+  inputs: [{ name: 'layout', type: 'layout' }],
+  outputs: [{ name: 'out', type: 'layout' }],
+  params: [
+    // tracks: permute whole columns/rows — always seamless, any distribution.
+    // cells: permute cells among the cells CONGRUENT to them, which is the
+    //   only flat permutation that tiles. On a uniform grid that is every
+    //   cell (a full scatter); on a fibonacci one it is only the repeats, so
+    //   a strictly-increasing distribution barely moves — use tracks there.
+    { name: 'mode', kind: 'select', options: ['tracks', 'cells'], default: 'tracks' },
+    { name: 'axes', kind: 'select', options: ['both', 'x', 'y'], default: 'both', showIf: { param: 'mode', in: ['tracks'] } },
+    { name: 'seed', kind: 'number', default: 1, min: 0, max: 9999, step: 1 },
+  ],
+  cook(inputs, params) {
+    const upstream = inputs.layout as LayoutValue;
+    const seed = Number(params.seed);
+    const src = upstream.placements;
+    if (src.length < 2) return { out: upstream };
+
+    if (params.mode === 'cells') {
+      // congruence classes: same extent, so any permutation within one is an
+      // exact swap. Point slots (no extent) form their own class.
+      const groups = new Map<string, number[]>();
+      src.forEach((p, i) => {
+        const k = p.w === undefined || p.h === undefined
+          ? 'point'
+          : `${Math.round(p.w * 1e3)}x${Math.round(p.h * 1e3)}`;
+        const g = groups.get(k);
+        if (g) g.push(i); else groups.set(k, [i]);
+      });
+      const placements = src.map((p) => ({ ...p }));
+      let salt = 17;
+      for (const members of groups.values()) {
+        if (members.length < 2) continue;
+        const perm = permutation(members.length, seed, salt++);
+        // positions move, identity stays: slot i takes the coordinates of the
+        // congruent slot the permutation points it at — rotation and cell shape
+        // travel with them, because both are properties of where a slot sits (a
+        // Radial ring's cells are congruent but each turned to its own sector,
+        // and a tangent on a curve is the curve's, not the slot's). On a grid
+        // every rotation is 0 and there are no sectors, so this is a no-op there.
+        perm.forEach((from, at) => {
+          placements[members[at]].x = src[members[from]].x;
+          placements[members[at]].y = src[members[from]].y;
+          placements[members[at]].rotation = src[members[from]].rotation;
+          if (src[members[from]].arc) placements[members[at]].arc = src[members[from]].arc;
+        });
+      }
+      return { out: { kind: 'layout', placements, closed: upstream.closed } satisfies LayoutValue };
+    }
+
+    const axes = String(params.axes);
+    const dx = axes === 'y' ? null : shiftTracks(src, (p) => p.col, (p) => p.w, (p) => p.x, seed, 31);
+    const dy = axes === 'x' ? null : shiftTracks(src, (p) => p.row, (p) => p.h, (p) => p.y, seed, 71);
+    if (!dx && !dy) return { out: upstream };
+
+    const placements = src.map((p) => ({
+      ...p,
+      x: p.x + (dx && p.col !== undefined ? dx.get(p.col) ?? 0 : 0),
+      y: p.y + (dy && p.row !== undefined ? dy.get(p.row) ?? 0 : 0),
+    }));
     return { out: { kind: 'layout', placements, closed: upstream.closed } satisfies LayoutValue };
   },
 };
@@ -585,6 +903,13 @@ export const DrawLayoutNode: NodeDef = {
       paths.push(...polylinesToPaths([{ points: circle, closed: true }]));
     };
     for (const p of (inputs.layout as LayoutValue).placements) {
+      if (p.arc) {
+        // a polar cell draws as its actual sector, so a ring's cells add back
+        // up to the ring however many spokes cut it
+        paths.push(...polylinesToPaths([{ points: arcCellOutline(p), closed: true }]));
+        dot(p.x, p.y, size * 0.35);
+        continue;
+      }
       if (p.w != null && p.h != null) {
         // cell placements draw as their actual rect (rotated with the
         // placement) plus a small center dot — the grid, not dot indicators

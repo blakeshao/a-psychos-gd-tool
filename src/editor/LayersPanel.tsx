@@ -230,6 +230,17 @@ function LayerRow({
         <button
           type="button"
           className="num-arrow"
+          title="duplicate layer"
+          onClick={(e) => {
+            e.stopPropagation();
+            useApp.getState().duplicateLayer(layer.id);
+          }}
+        >
+          ⧉
+        </button>
+        <button
+          type="button"
+          className="num-arrow"
           title="delete layer"
           disabled={last}
           onClick={(e) => {

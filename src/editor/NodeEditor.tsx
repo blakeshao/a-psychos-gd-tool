@@ -5,9 +5,9 @@
 // Figma-style pointer scheme: left-drag draws a marquee that selects every
 // node it touches (⌘/shift-click adds to the selection); pan with a
 // two-finger trackpad scroll, space+drag, or the middle/right button; pinch
-// zooms. Selected nodes move and delete as a group.
+// zooms. Selected nodes move, delete, and copy/paste as a group.
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Background,
   Panel,
@@ -25,6 +25,7 @@ import '@xyflow/react/dist/style.css';
 import { edgeKey } from '../engine/graph';
 import { socketTypes } from '../engine/registry';
 import { PALETTE, registry } from '../nodes';
+import { PRESETS } from '../presets';
 import { endGesture, selectActiveGraph, useApp, wireIsValid } from '../store';
 import { GfxNode } from './GfxNode';
 import type { SocketType } from '../engine/values';
@@ -131,16 +132,31 @@ export function NodeEditor() {
     });
   }, []);
 
-  // Cmd/Ctrl+Z undoes, +Shift redoes — skipped while a text field has focus so
-  // the browser's own undo keeps working inside param inputs.
+  // Cmd/Ctrl+Z undoes, +Shift redoes; +C/+V copy and paste the selected nodes.
+  // All of them are skipped while a text field has focus, so the browser's own
+  // undo and clipboard keep working inside param inputs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key !== 'z' && key !== 'c' && key !== 'v') return;
       const t = e.target;
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      e.preventDefault();
-      if (e.shiftKey) useApp.getState().redo();
-      else useApp.getState().undo();
+      const { undo, redo, copySelection, pasteClipboard, selectedNodeIds } = useApp.getState();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === 'c') {
+        // no nodes selected, or the user is copying text off the page (a cook
+        // log line, a node label) — leave the real clipboard to the browser
+        if (selectedNodeIds.length === 0 || window.getSelection()?.isCollapsed === false) return;
+        e.preventDefault();
+        copySelection();
+      } else {
+        e.preventDefault();
+        pasteClipboard();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -171,6 +187,7 @@ export function NodeEditor() {
     >
       <Background gap={16} size={1} />
       <Palette />
+      <Presets />
     </ReactFlow>
   );
 }
@@ -222,6 +239,56 @@ function Palette() {
           </div>
         </details>
       ))}
+    </Panel>
+  );
+}
+
+// Starting documents, in the canvas' lower right. Loading one replaces the
+// whole document — layers, frame and all — which is why it is one undo step
+// and why the panel says so. Lives inside <ReactFlow> to reframe the view on
+// the graph it just dropped in.
+function Presets() {
+  const { fitView } = useReactFlow();
+  const [collapsed, setCollapsed] = useState(false);
+  // bumped on every load; the effect below runs after the swapped-in nodes
+  // have rendered, which is the only point fitView has anything to frame
+  const [loads, setLoads] = useState(0);
+
+  useEffect(() => {
+    if (loads === 0) return;
+    const id = requestAnimationFrame(() => void fitView({ duration: 200 }));
+    return () => cancelAnimationFrame(id);
+  }, [loads, fitView]);
+
+  return (
+    <Panel position="bottom-right" className={`presets-panel${collapsed ? ' collapsed' : ''}`}>
+      <button
+        type="button"
+        className="presets-toggle"
+        title={collapsed ? 'expand the presets panel' : 'collapse the presets panel'}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <span className="presets-chevron">{collapsed ? '▸' : '▾'}</span>
+        <span className="presets-title">presets</span>
+      </button>
+      {!collapsed && (
+        <div className="presets-list">
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className="preset-btn"
+              title={`${preset.hint} — replaces the document (⌘/Ctrl Z undoes)`}
+              onClick={() => {
+                useApp.getState().loadPreset(preset.doc);
+                setLoads((n) => n + 1);
+              }}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }

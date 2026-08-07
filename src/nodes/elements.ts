@@ -117,6 +117,7 @@ export const DuplicatorNode: NodeDef = {
       for (const el of base) {
         items.push({
           content: el.content, // copies share content; transforms differ after Place
+          ...(el.srcRect ? { srcRect: el.srcRect } : {}), // copying a tile copies its window
           transform: { ...el.transform },
           index: items.length,
           progress: count === 1 ? 0 : i / (count - 1), // copy fraction — position, not density
@@ -313,6 +314,9 @@ export const PlaceNode: NodeDef = {
       }
       items.push({
         content: e.content,
+        // a Slice tile's window rides with it — the content is the whole
+        // image, so dropping this would place the entire picture per slot
+        ...(e.srcRect ? { srcRect: e.srcRect } : {}),
         // the placement replaces the element's position; rotation/scale compose
         transform: { x: p.x + offsetX, y: p.y + offsetY, rotation, scale },
         index: e.index,

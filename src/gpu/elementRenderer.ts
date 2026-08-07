@@ -56,7 +56,13 @@ export function renderElements(
   for (const el of items) {
     if (el.content.kind === 'raster') {
       flush(); // keep z-order: pending vector layer goes down first
-      gpu.drawQuad(el.content.texture, dst, elementCoeffs(el, el.content.width, el.content.height, width, height));
+      // a Slice tile draws its window, at the window's size — the texture it
+      // shares with its siblings is the whole image, and never its extent
+      const r = el.srcRect;
+      const w = r ? r.width * el.content.width : el.content.width;
+      const h = r ? r.height * el.content.height : el.content.height;
+      const win = r ? ([r.x, r.y, r.width, r.height] as const) : undefined;
+      gpu.drawQuad(el.content.texture, dst, elementCoeffs(el, w, h, width, height), win);
       continue;
     }
 
